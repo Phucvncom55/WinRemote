@@ -7,6 +7,7 @@ STATE="$DIR/state.env"
 RUNLOG=/tmp/vm_backup_run.log
 PROG=/tmp/vm_backup_progress
 CONF="$HOME/.config/rclone/rclone.conf"
+REMOTE="${VM_BACKUP_REMOTE:-onedrive}"
 LOCK=/tmp/vm_backup.lock
 CANCEL=/tmp/vm_backup_cancel
 
@@ -66,7 +67,7 @@ if [ "${VM_SKIP_SPACE_CHECK:-0}" != "1" ] && [ "$FREE" -gt 0 ] && [ "$FREE" -lt 
 fi
 
 FOLDER="${VM_BACKUP_FOLDER:-data_backup_$(date +%Y%m%d_%H%M%S)}"
-log "thư mục đích: onedrive:$FOLDER/parts/"
+log "thư mục đích: $REMOTE:$FOLDER/parts/"
 
 ck
 prog stop_vm 0 0
@@ -122,8 +123,8 @@ log "chia thành $PARTS parts (1GB/part)"
 
 ck
 prog upload "$ARC_BYTES" "$PARTS"
-log "upload lên onedrive:$FOLDER/parts/ ($PARTS parts)..."
-rclone copy --stats 15s --stats-one-line --stats-log-level NOTICE --transfers 8 --retries 5 --low-level-retries 10 --onedrive-chunk-size 60M --log-file /tmp/vm_upload.log --config "$CONF" /mnt/data/backup/parts "onedrive:$FOLDER/parts/"
+log "upload lên $REMOTE:$FOLDER/parts/ ($PARTS parts)..."
+rclone copy --stats 15s --stats-one-line --stats-log-level NOTICE --transfers 8 --retries 5 --low-level-retries 10 --drive-chunk-size 64M --onedrive-chunk-size 60M --log-file /tmp/vm_upload.log --config "$CONF" /mnt/data/backup/parts "$REMOTE:$FOLDER/parts/"
 UP_RC=$?
 if [ "$UP_RC" != "0" ]; then
   log "upload lỗi rc=$UP_RC"; tail -3 /tmp/vm_upload.log 2>/dev/null
@@ -134,7 +135,7 @@ log "upload xong"
 ck
 prog check "$ARC_BYTES" "$PARTS"
 log "xác minh remote (rclone check --one-way)..."
-if ! rclone check --one-way --config "$CONF" /mnt/data/backup/parts "onedrive:$FOLDER/parts/" >/tmp/vm_check.log 2>&1; then
+if ! rclone check --one-way --config "$CONF" /mnt/data/backup/parts "$REMOTE:$FOLDER/parts/" >/tmp/vm_check.log 2>&1; then
   log "rclone check THẤT BẠI"; tail -3 /tmp/vm_check.log 2>/dev/null
   echo "RESULT=check_failed"; exit 12
 fi
@@ -144,7 +145,7 @@ prog restart "$ARC_BYTES" "$PARTS"
 restart_vm
 
 if [ "${VM_KEEP_LOCAL:-0}" != "1" ]; then
-  log "dọn bản sao local (/mnt/data/backup) - bản trên OneDrive giữ nguyên"
+  log "dọn bản sao local (/mnt/data/backup) - bản trên $REMOTE giữ nguyên"
   rm -rf /mnt/data/backup
 fi
 
@@ -153,7 +154,7 @@ state_set last_backup_result ok
 state_set last_backup_folder "$FOLDER"
 state_set accumulated_sec 0
 prog done "$ARC_BYTES" "$PARTS"
-log "HOÀN TẤT backup -> onedrive:$FOLDER/parts/"
+log "HOÀN TẤT backup -> $REMOTE:$FOLDER/parts/"
 echo "RESULT=ok"
 echo "BACKUP_FOLDER=$FOLDER"
 echo "ARCHIVE_BYTES=$ARC_BYTES"

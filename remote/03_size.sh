@@ -1,10 +1,11 @@
 #!/bin/bash
 CONF=/home/codespace/.config/rclone/rclone.conf
+REMOTE="${VM_BACKUP_REMOTE:-onedrive}"
 ERR=/tmp/vmaio_size_err.log
 rm -f "$ERR"
 SZRC=""
 for i in 1 2 3; do
-  OUT=$(rclone size --json --config "$CONF" "onedrive:__RF__/parts/" 2>"$ERR")
+  OUT=$(rclone size --json --config "$CONF" "$REMOTE:__RF__/parts/" 2>"$ERR")
   RC=$?
   if [ "$RC" = "0" ] && [ -n "$OUT" ]; then echo "$OUT"; SZRC=0; break; fi
   SZRC=$RC

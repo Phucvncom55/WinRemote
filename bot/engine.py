@@ -68,7 +68,7 @@ class Engine:
         self._probe_cache = (0.0, None)
         self._act_cache = (0.0, None)
         self._quota_cache = (0.0, None)
-        self._bk_opts = {'keep_local': False, 'restart': True}
+        self._bk_opts = {'keep_local': False, 'restart': True, 'remote': ''}
         self._notify_gate = {}
 
     # ================= tiện ích chung =================
@@ -109,6 +109,29 @@ class Engine:
         probe = self.remote.probe()
         self._probe_cache = (time.time(), probe)
         return probe
+
+    # ================= cloud đích cho backup/restore =================
+    def _gdrive_label(self):
+        return f"Google Drive (gộp {len(self.cfg.gdrive_accounts)} tài khoản)"
+
+    def _backup_remote(self):
+        """(remote, label) mặc định theo cấu hình backup_backend."""
+        if (self.cfg.get('backup_backend') or 'onedrive') == 'gdrive' and self.cfg.has_gdrive:
+            return (self.cfg.get('gdrive_remote') or 'gdrive', self._gdrive_label())
+        return ('onedrive', 'OneDrive')
+
+    def _selected_backup_remote(self):
+        """Đích đang chọn ở màn Backup (có thể đổi bằng nút), có kiểm tra hợp lệ."""
+        remote = (self._bk_opts.get('remote') or '').strip()
+        if remote == 'gdrive' and self.cfg.has_gdrive:
+            return (self.cfg.get('gdrive_remote') or 'gdrive', self._gdrive_label())
+        if remote == 'onedrive' and self.cfg.has_onedrive:
+            return ('onedrive', 'OneDrive')
+        return self._backup_remote()
+
+    @staticmethod
+    def _remote_label(remote):
+        return 'OneDrive' if remote == 'onedrive' else 'Google Drive'
 
     # ================= tiếp nhận update =================
     def handle_update(self, upd):
@@ -618,9 +641,14 @@ class Engine:
                 probe = self.get_probe(max_age=4.0)
         except Exception:
             pass
+        remote, label = self._selected_backup_remote()
+        can_toggle = bool(self.cfg.has_gdrive and self.cfg.has_onedrive)
         text = ui.backup_confirm_text(self.cfg, self._bk_opts['keep_local'],
-                                      self._bk_opts['restart'], probe)
-        k = ui.backup_confirm_kb(self._bk_opts['keep_local'], self._bk_opts['restart'])
+                                      self._bk_opts['restart'], probe,
+                                      remote=remote, remote_label=label,
+                                      can_toggle=can_toggle)
+        k = ui.backup_confirm_kb(self._bk_opts['keep_local'], self._bk_opts['restart'],
+                                 remote=remote, remote_label=label, can_toggle=can_toggle)
         if mid:
             self.tg.edit_message(chat_id, mid, text, buttons=k)
         else:
@@ -678,25 +706,46 @@ class Engine:
             self.tg.send_message(chat_id, '❌ Lỗi quét OneDrive: ' + esc(str(e)[:250]))
 
     def _scan_backups(self):
-        out = ''
-        for attempt in (1, 2):
-            try:
-                out = self.remote.run_text(
-                    f"rclone lsd --config {CONF_PATH} onedrive: 2>&1", timeout=120,
-                    allow_fail=True)
-            except Exception:
-                out = ''
-            found = []
-            for line in out.splitlines():
-                m = RX_FOLDER.search(line)
-                if m:
-                    found.append(m.group(2))
-            if found:
-                return sorted(set(found), reverse=True)
-            if attempt == 1:
-                time.sleep(2)
-        raise JobError('Không thấy thư mục data_backup* nào trên OneDrive '
-                       '(kiểm tra token Onedrive / rclone conf).')
+        remotes = []
+        if self.cfg.has_gdrive:
+            remotes.append((self.cfg.get('gdrive_remote') or 'gdrive', self._gdrive_label()))
+        if self.cfg.has_onedrive or not remotes:
+            remotes.append(('onedrive', 'OneDrive'))
+        found = []
+        errors = []
+        for remote, label in remotes:
+            out = ''
+            for attempt in (1, 2):
+                try:
+                    out = self.remote.run_text(
+                        f"rclone lsd --config {CONF_PATH} {remote}: 2>&1", timeout=120,
+                        allow_fail=True)
+                except Exception as e:  # noqa
+                    out = ''
+                    errors.append(f'{remote}: {e}')
+                folders = []
+                for line in out.splitlines():
+                    m = RX_FOLDER.search(line)
+                    if m:
+                        folders.append({'folder': m.group(2), 'remote': remote, 'label': label})
+                if folders:
+                    found.extend(folders)
+                    break
+                if attempt == 1:
+                    time.sleep(2)
+        if not found:
+            extra = ('\n' + esc(' | '.join(errors))[:300]) if errors else ''
+            raise JobError('Không thấy thư mục data_backup* nào trên cloud '
+                           '(kiểm tra token OneDrive/Google Drive + rclone.conf).' + extra)
+        seen = set()
+        uniq = []
+        for it in found:
+            key = (it['remote'], it['folder'])
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(it)
+        return sorted(uniq, key=lambda x: x['folder'], reverse=True)
 
     # ================= callback =================
     def _handle_callback(self, cb):
@@ -739,6 +788,8 @@ class Engine:
                     self.show_cleanup(chat_id, mid=mid)
             elif head == 'ka':
                 self._cb_keepalive(chat_id, mid, p)
+            elif head == 'gd':
+                self._cb_gdrive(chat_id, mid, p)
             elif head == 'q':
                 if len(p) > 1 and p[1] == 'help':
                     self.tg.edit_message(chat_id, mid, ui.quota_help_text(self.cfg),
@@ -894,6 +945,51 @@ class Engine:
         elif act == 'acc':
             text, k = ui.account_text(self.cfg, self.ka.snapshot() if self.ka else None)
             self.tg.edit_message(chat_id, mid, text, buttons=k)
+        elif act == 'gdrive':
+            self.show_gdrive(chat_id, mid=mid)
+
+    def _cb_gdrive(self, chat_id, mid, p):
+        act = p[1] if len(p) > 1 else 'menu'
+        if act == 'menu':
+            self.show_gdrive(chat_id, mid=mid)
+        elif act == 'add':
+            self.pending = {'chat_id': chat_id, 'kind': 'gdtok'}
+            self.tg.edit_message(chat_id, mid, ui.gdrive_add_text(),
+                                 buttons=kb([[('❓ Cách lấy token', 'gd:help'),
+                                              ('❌ Bỏ qua', 'set:gdrive')]]))
+        elif act == 'help':
+            self.tg.send_message(chat_id, ui.gdrive_help_text(),
+                                 buttons=kb([[('➕ Thêm tài khoản', 'gd:add')],
+                                             [('☁️ Google Drive', 'set:gdrive')]]))
+        elif act == 'test':
+            self.start_job('Kiểm tra Google Drive', chat_id, self.worker_gdrive_sync)
+        elif act == 'use':
+            if not self.cfg.has_gdrive:
+                self.tg.send_message(chat_id, '❌ Chưa có tài khoản Google Drive nào.')
+                return
+            cur = (self.cfg.get('backup_backend') or 'onedrive')
+            new = 'onedrive' if cur == 'gdrive' else 'gdrive'
+            self.cfg.set('backup_backend', new)
+            self._bk_opts['remote'] = new
+            self.tg.send_message(chat_id, '✅ Backup/restore sẽ dùng <b>%s</b>.'
+                                 % ('Google Drive (gộp)' if new == 'gdrive' else 'OneDrive'))
+            self.show_gdrive(chat_id, mid=mid)
+        elif act == 'del':
+            idx = int(p[2]) if len(p) > 2 else -1
+            accs = self.cfg.gdrive_accounts
+            if 0 <= idx < len(accs):
+                gone = accs.pop(idx)
+                # đánh số lại cho gọn: gdrive1..n
+                for i, a in enumerate(accs, 1):
+                    a['name'] = f'gdrive{i}'
+                self.cfg.data['gdrive_accounts'] = accs
+                if not accs and (self.cfg.get('backup_backend') or '') == 'gdrive':
+                    self.cfg.data['backup_backend'] = 'onedrive'
+                self.cfg.save()
+                self.tg.send_message(chat_id, '🗑 Đã xóa tài khoản '
+                                     f"<code>{esc(gone.get('owner') or gone.get('name'))}</code>. "
+                                     'Bấm "Kiểm tra & ghi cấu hình" để cập nhật Codespace.')
+            self.show_gdrive(chat_id, mid=mid)
 
     def _cb_vm(self, chat_id, mid, p):
         act = p[1] if len(p) > 1 else 'menu'
@@ -1044,25 +1140,32 @@ class Engine:
         elif act == 'pk':
             idx = int(p[2]) if len(p) > 2 else -1
             if not (0 <= idx < len(self._rst_choices)):
-                self.tg.send_message(chat_id, '⚠️ Danh sách đã cũ — quét lại OneDrive…')
+                self.tg.send_message(chat_id, '⚠️ Danh sách đã cũ — quét lại cloud…')
                 self.show_restore_list(chat_id, mid=mid)
                 return
-            folder = self._rst_choices[idx]
+            choice = self._rst_choices[idx]
             try:
                 probe = self.get_probe(max_age=4.0)
                 img = probe.get('img_bytes') or 0
             except Exception:
                 img = 0
-            self.tg.edit_message(chat_id, mid, ui.restore_confirm_text(folder, img),
+            label = choice.get('label') if isinstance(choice, dict) else 'OneDrive'
+            self.tg.edit_message(chat_id, mid,
+                                 ui.restore_confirm_text(choice, img, label),
                                  buttons=ui.restore_confirm_kb(idx))
         elif act == 'go':
             idx = int(p[2]) if len(p) > 2 else -1
             if not (0 <= idx < len(self._rst_choices)):
                 self.tg.send_message(chat_id, '❌ Danh sách đã cũ — bấm /restore để quét lại.')
                 return
-            folder = self._rst_choices[idx]
+            choice = self._rst_choices[idx]
+            if isinstance(choice, dict):
+                folder = choice['folder']
+                remote = choice.get('remote') or 'onedrive'
+            else:
+                folder, remote = str(choice), 'onedrive'
             self.start_job('Khôi phục ' + folder[:30], chat_id,
-                           lambda ctx: self.worker_restore(ctx, folder))
+                           lambda ctx: self.worker_restore(ctx, folder, remote))
 
     def _cb_backup(self, chat_id, mid, p):
         act = p[1] if len(p) > 1 else 'new'
@@ -1073,6 +1176,10 @@ class Engine:
             self.show_backup_confirm(chat_id, mid=mid)
         elif act == 'r':
             self._bk_opts['restart'] = (p[2] == '1')
+            self.show_backup_confirm(chat_id, mid=mid)
+        elif act == 't':
+            cur = self._selected_backup_remote()[0]
+            self._bk_opts['remote'] = 'onedrive' if cur != 'onedrive' else 'gdrive'
             self.show_backup_confirm(chat_id, mid=mid)
         elif act == 'go':
             self.start_job('Backup', chat_id, self.worker_backup)
@@ -1119,6 +1226,10 @@ class Engine:
         elif kind == 'quota':
             if self._set_quota_manual(chat_id, text):
                 self.show_quota(chat_id, force=True)
+        elif kind == 'gdtok':
+            self._try_delete(chat_id, mid)
+            self.start_job('Thêm Google Drive', chat_id,
+                           lambda ctx: self.worker_gdrive_add(ctx, text))
         elif kind.startswith('vmf:'):
             self._apply_vmf(chat_id, kind[4:], text)
 
@@ -1371,8 +1482,11 @@ class Engine:
 
         note = ''
         od_line = ''
+        gd_line = ''
         if not self.cfg.has_onedrive:
-            note = '\n⚠️ Chưa nối OneDrive (thiếu token) — nhập ở /settings rồi chạy /setup lại.'
+            if not self.cfg.has_gdrive:
+                note = ('\n⚠️ Chưa nối cloud nào — thêm OneDrive (/settings) hoặc '
+                        'Google Drive (/gdrive) rồi chạy /setup lại.')
         else:
             ctx.edit('☁️ Ghi rclone.conf + xác minh OneDrive…', force=True)
             b64 = base64.b64encode(self.cfg.get('onedrive_token').encode('utf-8')).decode('ascii')
@@ -1409,11 +1523,29 @@ class Engine:
                            f"{fmt_bytes(self.cfg.get('od_used') or 0)}/"
                            f"{fmt_bytes(self.cfg.get('od_total') or 0)}")
 
+        if self.cfg.has_gdrive:
+            ctx.edit('☁️ Gộp các tài khoản Google Drive thành 1 ổ lớn…', force=True)
+            ok3, gd_log = self._push_gdrive(ctx)
+            m = re.search(r'GD_TOTAL=(\d+)', gd_log)
+            total = int(m.group(1)) if m else 0
+            m = re.search(r'GD_USED=(\d+)', gd_log)
+            used = int(m.group(1)) if m else 0
+            if ok3:
+                gd_line = (f"\n☁️ Google Drive: <b>{len(self.cfg.gdrive_accounts)} tài khoản</b> — "
+                           f"{fmt_bytes(used)}/{fmt_bytes(total)} • remote "
+                           f"<code>{esc(self.cfg.get('gdrive_remote') or 'gdrive')}:</code>")
+            else:
+                msg = '\n⚠️ Chưa ghi được cấu hình Google Drive — /gdrive → Kiểm tra & ghi lại.'
+                if (self.cfg.get('backup_backend') or '') == 'gdrive':
+                    raise JobError('Ghi cấu hình Google Drive thất bại. Log: '
+                                   + esc(gd_log[-300:]))
+                note += msg
+
         ctx.edit('✅ <b>Môi trường Codespace sẵn sàng</b> (ổ dữ liệu đã mount).'
-                 + od_line + note + final_note,
+                 + od_line + gd_line + note + final_note,
                  buttons=kb([
                      [('▶️ Bật VM', 'vm:start')],
-                     [('📥 Restore từ OneDrive', 'rst:scan'), ('📊 Trạng thái', 'home')]]),
+                     [('📥 Restore từ cloud', 'rst:scan'), ('📊 Trạng thái', 'home')]]),
                  force=True)
 
     # ================= worker: OneDrive OAuth =================
@@ -1683,6 +1815,9 @@ class Engine:
     # ================= worker: backup =================
     def worker_backup(self, ctx):
         ctx.edit('💾 <b>BACKUP</b> — kiểm tra điều kiện…', force=True)
+        remote, label = self._selected_backup_remote()
+        if remote != 'onedrive' and not self.cfg.has_gdrive:
+            raise JobError('Chưa có tài khoản Google Drive — mở /gdrive để thêm.')
         self.remote.ensure_available(progress=lambda t: ctx.edit('💾 ' + esc(t), buttons=ui.job_kb()))
         probe = self.remote.probe()
         if probe['container'] == 'none':
@@ -1691,8 +1826,14 @@ class Engine:
             raise JobError('Chưa có data.img trên Codespace — hãy Restore hoặc bật VM tạo đĩa trước.')
         if probe['lock_busy']:
             raise JobError('Đang có backup khác chạy — chờ xong rồi thử lại.')
-        if not probe['conf']:
-            raise JobError('Chưa cấu hình OneDrive (rclone) — chạy /setup trước.')
+        if remote == 'onedrive' and not probe['conf']:
+            raise JobError('Chưa cấu hình OneDrive (rclone) — chạy /setup trước '
+                           'hoặc chuyển đích sang Google Drive (/gdrive).')
+        if remote != 'onedrive' and not probe.get('gdrive'):
+            ctx.edit('☁️ Ghi cấu hình Google Drive (union) lên Codespace…', force=True)
+            self._push_gdrive(ctx)
+        elif remote == 'onedrive' and not probe['conf']:
+            raise JobError('Chưa có rclone.conf trên Codespace — chạy /setup trước.')
 
         chk = self.remote.run_text(f"test -f {WD_DIR}/backup_once.sh && echo YES || echo NO")
         if 'YES' not in chk:
@@ -1704,6 +1845,7 @@ class Engine:
             env_parts.append('VM_KEEP_LOCAL=1')
         if not self._bk_opts['restart']:
             env_parts.append('VM_FORCE_NO_RESTART=1')
+        env_parts.append('VM_BACKUP_REMOTE=' + remote)
         env_str = ' '.join(env_parts)
         pre = ('rm -f /tmp/vm_backup_busy /tmp/vm_backup_run.log /tmp/vm_backup_progress '
                '/tmp/vm_upload.log /tmp/vm_backup_cancel')
@@ -1777,7 +1919,7 @@ class Engine:
             ctx.edit(msg, buttons=ui.job_kb())
 
             if marker:
-                self._finish_backup(ctx, marker, el)
+                self._finish_backup(ctx, marker, el, remote, label)
                 return
             if not marker and alive <= 0 and el > 150:
                 raise JobError('Backup dừng bất thường (tiến trình biến mất). '
@@ -1786,7 +1928,7 @@ class Engine:
                 raise JobError('Backup quá 24h — dừng theo dõi.')
             ctx.sleep(self.poll_sec)
 
-    def _finish_backup(self, ctx, marker, el):
+    def _finish_backup(self, ctx, marker, el, remote='onedrive', label='OneDrive'):
         if marker == 'RESULT=cancelled':
             ctx.edit(f'⛔ Đã hủy backup an toàn sau {fmt_elapsed(el)} '
                      '(VM đã được bật lại nếu trước đó đang chạy).',
@@ -1813,35 +1955,41 @@ class Engine:
         m = re.search(r'PARTS=(\d+)', final_raw)
         if m:
             parts = self._int_safe(m.group(1))
-        try:
-            self.remote.refetch_onedrive_token()
-        except Exception:
-            pass
-        note = ('\n🗄 Bản local đã được dọn (backup cũ trên OneDrive không bị xóa).'
+        if remote == 'onedrive':
+            try:
+                self.remote.refetch_onedrive_token()
+            except Exception:
+                pass
+        note = ('\n🗄 Bản local đã được dọn (backup cũ trên cloud không bị xóa).'
                 if not self._bk_opts['keep_local'] else '\n🗄 Bản local được giữ trong /mnt/data/backup.')
         ctx.edit(
             f'✅ <b>HOÀN TẤT BACKUP</b> ({fmt_elapsed(el)})\n'
-            f"• Đích: <code>onedrive:{esc(folder)}/parts/</code>\n"
+            f"• Đích: <b>{esc(label)}</b> — <code>{esc(remote)}:{esc(folder)}/parts/</code>\n"
             f'• Archive: <b>{fmt_bytes(arc)}</b> • {parts} part (1GB/part)' + note,
             buttons=kb([
                 [('📥 Restore bản này', 'rst:scan'), ('📊 Trạng thái', 'home')]]),
             force=True)
 
     # ================= worker: restore =================
-    def worker_restore(self, ctx, folder):
+    def worker_restore(self, ctx, folder, remote='onedrive'):
         ctx.edit('📥 <b>KHÔI PHỤC</b> — kiểm tra Codespace…', force=True)
         self.remote.ensure_available(progress=lambda t: ctx.edit('📥 ' + esc(t), buttons=ui.job_kb()))
-        if not self.cfg.has_onedrive:
+        if remote == 'onedrive' and not self.cfg.has_onedrive:
             raise JobError('Chưa có token OneDrive — /settings.')
+        if remote != 'onedrive' and not self.cfg.has_gdrive:
+            raise JobError('Chưa có tài khoản Google Drive — /gdrive.')
         probe = self.remote.probe()
-        if not probe['mount'] or not probe['conf']:
+        if not probe['mount'] or (remote == 'onedrive' and not probe['conf']) or \
+                (remote != 'onedrive' and not probe.get('gdrive')):
             ctx.edit('🧰 Chưa có ổ dữ liệu/rclone — chạy setup trước…', force=True)
             self._setup_inline(ctx)
             probe = self.remote.probe()
 
         ctx.edit(f'📏 Đo dung lượng backup <code>{esc(folder)}</code>…', force=True)
-        self.remote.push_script('03_size.sh', '/tmp/wm_03_size.sh', repl={'__RF__': folder})
-        sz_out = self.remote.run_text('bash /tmp/wm_03_size.sh', timeout=180, allow_fail=True)
+        self.remote.push_script('03_size.sh', '/tmp/wm_03_size.sh',
+                                repl={'__RF__': folder, '__REMOTE__': remote})
+        sz_out = self.remote.run_text(
+            f'VM_BACKUP_REMOTE={remote} bash /tmp/wm_03_size.sh', timeout=180, allow_fail=True)
         total_bytes, total_count = 0, 0
         m = re.search(r'\{[^{}]*"bytes"[^{}]*\}', sz_out)
         if m:
@@ -1857,7 +2005,8 @@ class Engine:
         ctx.edit(f'📦 Tải backup: {fmt_bytes(total_bytes)} ({total_count} file)…', force=True)
 
         self.remote.start_script('04_dl.sh', '/tmp/wm_04_dl.sh', '/tmp/wm_dl.log',
-                                 repl={'__RF__': folder})
+                                 repl={'__RF__': folder, '__REMOTE__': remote},
+                                 env_prefix=f'VM_BACKUP_REMOTE={remote}')
         cancel_sent = [False]
 
         def _cancel_remote():
@@ -1999,7 +2148,8 @@ class Engine:
         img = self.remote.get_int("stat -c %s /mnt/data/data.img 2>/dev/null || echo 0")
         ctx.edit(
             '✅ <b>HOÀN TẤT KHÔI PHỤC</b>\n'
-            f"• Nguồn: <code>onedrive:{esc(folder)}</code>\n"
+            f"• Nguồn: <code>{esc(remote)}:{esc(folder)}</code> "
+            f'({esc(self._remote_label(remote))})\n'
             f'• data.img: <b>{fmt_bytes(img)}</b> • đã dọn file tạm (~/mnt/data/backup)',
             buttons=kb([
                 [('▶️ Bật VM ngay', 'vm:start'), ('💾 Backup ngay', 'bk:new')],
@@ -2007,19 +2157,172 @@ class Engine:
             force=True)
 
     def _setup_inline(self, ctx):
-        """Chạy 01+02 không cần job riêng (dùng trong restore)."""
+        """Chạy 01+02(+10) không cần job riêng (dùng trong restore)."""
         self.remote.start_script('01_setup.sh', '/tmp/wm_01_setup.sh', '/tmp/wm_setup.log')
         ok = self._wait_marker(ctx, '/tmp/wm_setup.log', 'ST_ALL_DONE', 'ST_OK',
                                600, 6, 'mount ổ dữ liệu + cài rclone')
         if not ok:
             raise JobError('Setup mount/rclone thất bại khi chuẩn bị restore.')
-        b64 = base64.b64encode(self.cfg.get('onedrive_token').encode('utf-8')).decode('ascii')
-        self.remote.start_script('02_rclone.sh', '/tmp/wm_02_rclone.sh', '/tmp/wm_rclone.log',
-                                 repl={'__TOKB64__': b64})
-        ok2 = self._wait_marker(ctx, '/tmp/wm_rclone.log', 'RCL_ALL_DONE', 'RCL_OK',
-                                300, 6, 'nối OneDrive')
-        if not ok2:
-            raise JobError('Nối OneDrive thất bại khi chuẩn bị restore.')
+        if self.cfg.has_onedrive:
+            b64 = base64.b64encode(self.cfg.get('onedrive_token').encode('utf-8')).decode('ascii')
+            self.remote.start_script('02_rclone.sh', '/tmp/wm_02_rclone.sh', '/tmp/wm_rclone.log',
+                                     repl={'__TOKB64__': b64})
+            ok2 = self._wait_marker(ctx, '/tmp/wm_rclone.log', 'RCL_ALL_DONE', 'RCL_OK',
+                                    300, 6, 'nối OneDrive')
+            if not ok2:
+                raise JobError('Nối OneDrive thất bại khi chuẩn bị restore.')
+        if self.cfg.has_gdrive:
+            ok3, log3 = self._push_gdrive(ctx)
+            if not ok3:
+                raise JobError('Ghi cấu hình Google Drive thất bại khi chuẩn bị restore. '
+                               'Log: ' + esc(log3[-300:]))
+
+    # ================= Google Drive (nhiều tài khoản) =================
+    def _gdrive_payload(self):
+        accs = []
+        for i, a in enumerate(self.cfg.gdrive_accounts, 1):
+            name = str(a.get('name') or f'gdrive{i}')
+            if not re.fullmatch(r'gdrive\d+', name):
+                name = f'gdrive{i}'
+            tok = a.get('token') or ''
+            if isinstance(tok, dict):
+                tok = json.dumps(tok)
+            accs.append({'name': name, 'token': str(tok)})
+        return base64.b64encode(json.dumps(accs).encode('utf-8')).decode('ascii')
+
+    def _push_gdrive(self, ctx):
+        """Ghi cấu hình gdriveN + remote union lên Codespace. Trả (ok, log)."""
+        if not self.cfg.has_gdrive:
+            return False, 'GD_NO_ACCOUNTS'
+        b64 = self._gdrive_payload()
+        self.remote.start_script(
+            '10_gdrive.sh', '/tmp/wm_10_gdrive.sh', '/tmp/wm_gdrive.log',
+            repl={'__ACCOUNTS_B64__': b64,
+                  '__UNION__': self.cfg.get('gdrive_remote') or 'gdrive'})
+        ok = self._wait_marker(ctx, '/tmp/wm_gdrive.log', 'GD_ALL_DONE', 'GD_OK',
+                               900, 8, 'gộp Google Drive (union)')
+        logtxt = self.remote.tail('/tmp/wm_gdrive.log', 40)
+        return ok, logtxt
+
+    def show_gdrive(self, chat_id, mid=None):
+        text = ui.gdrive_text(self.cfg)
+        k = ui.gdrive_kb(self.cfg)
+        if mid:
+            self.tg.edit_message(chat_id, mid, text, buttons=k)
+        else:
+            self.tg.send_message(chat_id, text, buttons=k)
+
+    def cmd_gdrive(self, chat_id, args):
+        self.show_gdrive(chat_id)
+
+    def worker_gdrive_sync(self, ctx):
+        ctx.edit('☁️ <b>GOOGLE DRIVE</b> — kiểm tra token từng tài khoản…', force=True)
+        accs = self.cfg.gdrive_accounts
+        if not accs:
+            raise JobError('Chưa có tài khoản Google Drive — bấm "➕ Thêm tài khoản".')
+        import bot.gh as ghmod
+        changed = False
+        lines = []
+        for i, a in enumerate(accs, 1):
+            tok = a.get('token') or ''
+            info, err = ghmod.gdrive_info(tok)
+            if err:
+                new, rerr = oauth.refresh_gdrive(
+                    tok, self.cfg.get('gdrive_client_id') or None,
+                    self.cfg.get('gdrive_client_secret') or None)
+                if new:
+                    tok = json.dumps(new)
+                    a['token'] = tok
+                    changed = True
+                    info, err = ghmod.gdrive_info(tok)
+                elif rerr:
+                    err = rerr
+            if info:
+                a['owner'] = info.get('owner') or a.get('owner') or ''
+                a['total'] = info.get('total') or 0
+                a['used'] = info.get('used') or 0
+                changed = True
+                lines.append(f"✅ {i}. {esc(a['owner'])} — "
+                             f"{fmt_bytes(a['used'])}/{fmt_bytes(a['total'])}")
+            else:
+                lines.append(f"⚠️ {i}. {esc(a.get('owner') or a.get('name') or '?')} — "
+                             f"{esc(str(err)[:160])}")
+        if changed:
+            self.cfg.data['gdrive_accounts'] = accs
+            self.cfg.save()
+        ctx.edit('☁️ <b>GOOGLE DRIVE — KIỂM TRA TOKEN</b>\n\n' + '\n'.join(lines)
+                 + '\n\n⏳ Đang ghi cấu hình union lên Codespace…',
+                 buttons=ui.job_kb(), force=True)
+        self.remote.ensure_available(
+            progress=lambda t: ctx.edit('☁️ ' + esc(t), buttons=ui.job_kb()))
+        ok, log = self._push_gdrive(ctx)
+        if not ok:
+            raise JobError('Ghi cấu hình Google Drive thất bại. Log: ' + esc(log[-300:]))
+        tot, usd = self.cfg.gdrive_total()
+        ctx.edit('✅ <b>GOOGLE DRIVE SẴN SÀNG</b>\n' + '\n'.join(lines) +
+                 f"\n\n• Ổ gộp: <code>{esc(self.cfg.get('gdrive_remote') or 'gdrive')}:</code> "
+                 f"— {fmt_bytes(usd)}/{fmt_bytes(tot)}\n"
+                 f"• Số tài khoản hoạt động: <b>{len(accs)}</b>\n"
+                 '• Upload/restore sẽ chia file lên tất cả tài khoản theo dung lượng trống.',
+                 buttons=kb([[('💾 Backup ngay', 'bk:new'), ('📥 Restore', 'rst:scan')],
+                             [('☁️ Google Drive', 'set:gdrive'), ('🏠 Trang chính', 'home')]]),
+                 force=True)
+
+    def worker_gdrive_add(self, ctx, text):
+        ctx.edit('☁️ Đang kiểm tra token Google Drive…', force=True)
+        raw = (text or '').strip()
+        try:
+            parsed = json.loads(raw)
+        except ValueError as e:
+            raise JobError(f'Không phải JSON: {esc(str(e))}. Copy nguyên chuỗi từ '
+                           'rclone authorize "drive".')
+        if not isinstance(parsed, dict) or not parsed.get('access_token'):
+            raise JobError('JSON thiếu <code>access_token</code>.')
+        import bot.gh as ghmod
+        info, err = ghmod.gdrive_info(raw)
+        if err:
+            new, rerr = oauth.refresh_gdrive(
+                raw, self.cfg.get('gdrive_client_id') or None,
+                self.cfg.get('gdrive_client_secret') or None)
+            if new:
+                raw = json.dumps(new)
+                info, err = ghmod.gdrive_info(raw)
+            elif rerr:
+                err = rerr
+        if not info:
+            raise JobError('Không xác minh được token Google Drive:\n'
+                           + esc(str(err)[:400]))
+        accs = self.cfg.gdrive_accounts
+        owner = info.get('owner') or ''
+        name = ''
+        for a in accs:
+            if owner and (a.get('owner') or '') == owner:
+                name = a.get('name') or ''
+                break
+        if not name:
+            n = len(accs) + 1
+            name = f'gdrive{n}'
+        entry = {'name': name, 'owner': owner, 'token': raw,
+                 'total': info.get('total') or 0, 'used': info.get('used') or 0}
+        replaced = False
+        for i, a in enumerate(accs):
+            if a.get('name') == name:
+                accs[i] = entry
+                replaced = True
+                break
+        if not replaced:
+            accs.append(entry)
+        self.cfg.data['gdrive_accounts'] = accs
+        self.cfg.save()
+        tot, usd = self.cfg.gdrive_total()
+        ctx.edit(('♻️ Đã cập nhật' if replaced else '✅ Đã thêm') +
+                 f' tài khoản Google Drive: <b>{esc(owner)}</b>\n'
+                 f'• Dung lượng: {fmt_bytes(entry["used"])}/{fmt_bytes(entry["total"])}\n'
+                 f'• Tổng ổ gộp ({len(accs)} tk): <b>{fmt_bytes(usd)}/{fmt_bytes(tot)}</b>\n\n'
+                 'Bấm "🧪 Kiểm tra & ghi cấu hình" để ghi union lên Codespace.',
+                 buttons=kb([[('🧪 Ghi cấu hình ngay', 'gd:test')],
+                             [('☁️ Google Drive', 'set:gdrive'), ('🏠 Trang chính', 'home')]]),
+                 force=True)
 
     # ================= worker: VM =================
     def worker_vm_start(self, ctx):

@@ -15,6 +15,12 @@ DEFAULTS = {
     'od_owner': '',
     'od_total': 0,
     'od_used': 0,
+    # Google Drive: gom nhiều tài khoản thành 1 remote union (ổ lớn)
+    'gdrive_accounts': [],
+    'gdrive_client_id': '',
+    'gdrive_client_secret': '',
+    'gdrive_remote': 'gdrive',
+    'backup_backend': 'onedrive',
     'codespace': '',
     'cs_repo': '',
     'cs_machine': 'standardLinux32gb',
@@ -104,6 +110,22 @@ class Config:
     @property
     def has_onedrive(self):
         return bool(self.data.get('onedrive_token'))
+
+    @property
+    def has_gdrive(self):
+        return any((a or {}).get('token') for a in (self.data.get('gdrive_accounts') or []))
+
+    @property
+    def gdrive_accounts(self):
+        return [a for a in (self.data.get('gdrive_accounts') or [])
+                if isinstance(a, dict) and a.get('token')]
+
+    def gdrive_total(self):
+        total = used = 0
+        for a in self.gdrive_accounts:
+            total += int(a.get('total') or 0)
+            used += int(a.get('used') or 0)
+        return total, used
 
     @property
     def has_codespace(self):

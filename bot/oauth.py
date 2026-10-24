@@ -149,3 +149,39 @@ def refresh_onedrive(token_json, client_id=None):
     if not data.get('refresh_token'):
         data['refresh_token'] = tok.get('refresh_token')
     return normalize_token(data, cid), None
+
+
+# ------------------------- Google Drive -------------------------
+# Client công khai của rclone (dùng khi token được tạo bằng `rclone authorize drive`).
+# Có thể override bằng gdrive_client_id / gdrive_client_secret trong bot-config.json.
+GDRIVE_CLIENT_ID = '202264815644.apps.googleusercontent.com'
+GDRIVE_CLIENT_SECRET = 'X4Z3ca8xfWDb1V30epK2XaF7'
+GDRIVE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
+
+
+def refresh_gdrive(token_json, client_id=None, client_secret=None):
+    """Làm mới access_token Google Drive từ refresh_token. Trả (token, error)."""
+    try:
+        tok = json.loads(token_json or '{}')
+    except ValueError:
+        return None, 'Token không phải JSON'
+    if not isinstance(tok, dict) or not tok.get('refresh_token'):
+        return None, 'Token thiếu refresh_token — cần đăng nhập lại'
+    cid = (client_id or tok.get('_client_id') or GDRIVE_CLIENT_ID).strip()
+    secret = (client_secret or tok.get('_client_secret') or GDRIVE_CLIENT_SECRET).strip()
+    data, err = _post(GDRIVE_TOKEN_URL, {
+        'grant_type': 'refresh_token',
+        'client_id': cid,
+        'client_secret': secret,
+        'refresh_token': str(tok.get('refresh_token')),
+    })
+    if err:
+        return None, err
+    if not data or not data.get('access_token'):
+        msg = (data or {}).get('error_description') or (data or {}).get('error') or 'không rõ'
+        return None, f'Không làm mới được token Google Drive: {msg}'
+    if not data.get('refresh_token'):
+        data['refresh_token'] = tok.get('refresh_token')
+    new = normalize_token(data, cid)
+    new['_client_secret'] = secret
+    return new, None

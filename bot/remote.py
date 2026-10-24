@@ -152,6 +152,7 @@ class Remote:
             'echo "V_RESTARTS=$R"\n'
             'echo "V_IMG=$(stat -c %s /mnt/data/data.img 2>/dev/null || echo 0)"\n'
             'echo "V_CONF=$(test -f /home/codespace/.config/rclone/rclone.conf && echo 1 || echo 0)"\n'
+            'echo "V_GDRIVE=$(grep -qs \'^\\[gdrive\\]\' /home/codespace/.config/rclone/rclone.conf && echo 1 || echo 0)"\n'
             'echo "V_MOUNT=$(mountpoint -q /mnt/data && echo 1 || echo 0)"\n'
             'echo "V_LOCK=$( (flock -n /tmp/vm_backup.lock -c true 2>/dev/null && echo 0) || echo 1)"\n'
             "W=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:8006 || true); "
@@ -170,6 +171,7 @@ class Remote:
             'restarts': _int(kv.get('V_RESTARTS')),
             'img_bytes': _int(kv.get('V_IMG')),
             'conf': kv.get('V_CONF') == '1',
+            'gdrive': kv.get('V_GDRIVE') == '1',
             'mount': kv.get('V_MOUNT') == '1',
             'lock_busy': kv.get('V_LOCK') == '1',
             'web': kv.get('V_WEB', '000'),

@@ -126,6 +126,10 @@ def account_text(cfg, ka_snap):
                      f"{fmt_bytes(cfg.get('od_used') or 0)}/{fmt_bytes(cfg.get('od_total') or 0)}")
     else:
         lines.append(f"☁️ OneDrive: {'✅ token đã lưu' if od_tok else '⛔ chưa có token'}")
+    if cfg.gdrive_accounts:
+        tot, usd = cfg.gdrive_total()
+        lines.append(f"☁️ Google Drive: <b>{len(cfg.gdrive_accounts)} tài khoản</b> — "
+                     f"{fmt_bytes(usd)}/{fmt_bytes(tot)}")
     lines.append(f"🧩 Codespace: <code>{esc(cfg.get('codespace') or '(chưa chọn)')}</code>")
     lines.append(f"🖥 VM: {vm['cores']} cores • {vm['ram_gb']}G RAM • {vm['disk_gb']}G disk • "
                  f"Windows {esc(vm['windows_version'])} • user <b>{esc(vm['user'])}</b>")
@@ -161,10 +165,16 @@ def status_text(cfg, cs_state, probe, ka_snap, job_info, act=None, quota=None):
             lines.append(f"🗄 Ổ /mnt/data: <code>{esc(df)}</code>")
         lines.append(f"🔗 rclone: {'✅' if probe.get('conf') else '❌ chưa cấu hình (chạy /setup)'} • "
                      f"mount data: {'✅' if probe.get('mount') else '❌'}"
+                     + (' • Drive gộp ✅' if probe.get('gdrive') else '')
                      + (' • ⏳ <b>đang backup</b>' if probe.get('lock_busy') else ''))
     if cfg.get('od_owner'):
         lines.append(f"☁️ OneDrive: {esc(cfg.get('od_owner'))} — "
                      f"{fmt_bytes(cfg.get('od_used') or 0)}/{fmt_bytes(cfg.get('od_total') or 0)}")
+    if cfg.gdrive_accounts:
+        tot, usd = cfg.gdrive_total()
+        lines.append(f"☁️ Google Drive: {len(cfg.gdrive_accounts)} tk • "
+                     f"{fmt_bytes(usd)}/{fmt_bytes(tot)}"
+                     + (' • <b>đích backup</b>' if (cfg.get('backup_backend') or '') == 'gdrive' else ''))
     if act and act.get('status') in ACT_ACTIVE:
         st = str(act.get('status'))
         st_txt = ACT_STATE_VN.get(st, st)
@@ -223,6 +233,13 @@ def settings_text(cfg):
     lines.append(f"🐙 GitHub token: {'✅ đã lưu' if cfg.has_github else '⛔ chưa có'}"
                  + (f" (<b>{esc(cfg.get('github_login'))}</b>)" if cfg.get('github_login') else ''))
     lines.append(f"☁️ OneDrive token: {'✅ đã lưu' if cfg.has_onedrive else '⛔ chưa có'}")
+    n_gd = len(cfg.gdrive_accounts)
+    if n_gd:
+        tot, usd = cfg.gdrive_total()
+        lines.append(f"☁️ Google Drive: ✅ {n_gd} tài khoản — {fmt_bytes(usd)}/{fmt_bytes(tot)}"
+                     f" • backup: {'Google Drive' if (cfg.get('backup_backend') or '') == 'gdrive' else 'OneDrive'}")
+    else:
+        lines.append('☁️ Google Drive: ⛔ chưa có tài khoản')
     lines.append(f"🧩 Codespace: <code>{esc(cfg.get('codespace') or '(chưa chọn)')}</code>")
     if cfg.get('cs_repo'):
         lines.append(f"📦 Repo: <code>{esc(cfg.get('cs_repo'))}</code>"
@@ -238,6 +255,7 @@ def settings_kb(cfg):
     ka = 'BẬT' if cfg.get('keepalive_enabled') else 'TẮT'
     return kb([
         [('🔑 GitHub token', 'set:gh'), ('☁️ OneDrive', 'set:od')],
+        [(f"☁️ Google Drive: {len(cfg.gdrive_accounts)} tk", 'set:gdrive')],
         [(f"🧩 Codespace: {shorten(cfg.get('codespace') or 'chọn…', 18)}", 'set:cs')],
         [(f"📦 Repo: {shorten(cfg.get('cs_repo') or 'chưa đặt', 24)}", 'set:repo')],
         [('🆕 Tạo Codespace mới (4c/16G/32G)', 'set:csnew')],
@@ -364,6 +382,93 @@ def onedrive_login_kb(uri):
         rows.append([('🌐 Mở trang đăng nhập Microsoft', uri)])
     rows.append([('⛔ Hủy đăng nhập', 'job:cancel')])
     return kb(rows)
+
+
+# ============================ Google Drive (nhiều tài khoản) ============================
+
+def gdrive_used_label(cfg):
+    return 'Google Drive' if (cfg.get('backup_backend') or 'onedrive') == 'gdrive' \
+        and cfg.has_gdrive else 'OneDrive'
+
+
+def gdrive_text(cfg):
+    accs = cfg.gdrive_accounts
+    total, used = cfg.gdrive_total()
+    backend = (cfg.get('backup_backend') or 'onedrive')
+    lines = ['☁️ <b>GOOGLE DRIVE — GỘP NHIỀU TÀI KHOẢN</b>', '']
+    lines.append(f'• Số tài khoản: <b>{len(accs)}</b>')
+    if accs:
+        lines.append(f'• Tổng dung lượng: <b>{fmt_bytes(used)}</b> / '
+                     f'<b>{fmt_bytes(total)}</b>')
+        lines.append(f"• Remote gộp: <code>{esc(cfg.get('gdrive_remote') or 'gdrive')}:</code> "
+                     '(một ổ lớn cho backup/restore)')
+    lines.append(f"• Đang dùng để backup: <b>{'Google Drive' if backend == 'gdrive' else 'OneDrive'}</b>")
+    lines.append('')
+    if accs:
+        lines.append('📋 <b>Danh sách tài khoản</b>')
+        for i, a in enumerate(accs[:10], 1):
+            lines.append(f"　{i}. {esc(a.get('owner') or a.get('name') or '?')} — "
+                         f"{fmt_bytes(a.get('used') or 0)}/{fmt_bytes(a.get('total') or 0)}")
+        lines.append('')
+        lines.append('💡 Bot tạo 1 remote cho mỗi tài khoản (gdrive1, gdrive2, …) rồi gộp '
+                     'thành remote <code>gdrive:</code>. File backup được chia lên các tài khoản '
+                     'theo dung lượng trống; restore đọc lại xuyên suốt các tài khoản.')
+    else:
+        lines.append('<i>Chưa có tài khoản nào. Bấm "➕ Thêm tài khoản" để dán token JSON '
+                     'lấy từ <code>rclone authorize "drive"</code>.</i>')
+        lines.append('')
+        lines.append('🎯 Nhờ vậy nhiều tài khoản 15 GB được gộp thành một ổ lớn để chứa backup VM.')
+    return '\n'.join(lines)
+
+
+def gdrive_kb(cfg):
+    rows = [[('➕ Thêm tài khoản (dán token)', 'gd:add')]]
+    if cfg.has_gdrive:
+        rows.append([('🧪 Kiểm tra & ghi cấu hình', 'gd:test')])
+        cur = (cfg.get('backup_backend') or 'onedrive')
+        target = 'OneDrive' if cur == 'gdrive' else 'Google Drive'
+        rows.append([(f'☁️ Dùng {target} để backup', 'gd:use')])
+        del_row = []
+        for i, a in enumerate(cfg.gdrive_accounts[:6]):
+            del_row.append((f"🗑 {i + 1}", f'gd:del:{i}'))
+        if del_row:
+            rows.append(del_row)
+    rows.append([('❓ Cách lấy token', 'gd:help')])
+    rows.append([('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')])
+    return kb(rows)
+
+
+def gdrive_help_text():
+    return ('🔑 <b>CÁCH LẤY TOKEN GOOGLE DRIVE</b>\n\n'
+            'Làm trên máy có trình duyệt (Windows/Mac/Linux):\n'
+            '1. Cài rclone: https://rclone.org/downloads/\n'
+            '2. Mở terminal, chạy:\n'
+            '   <code>rclone authorize "drive"</code>\n'
+            '3. Trình duyệt mở ra → đăng nhập tài khoản Google → bấm <b>Cho phép</b>.\n'
+            '4. Terminal in ra một chuỗi JSON dạng:\n'
+            '   <code>{"access_token":"ya29...","refresh_token":"1//...","expiry":"..."}</code>\n'
+            '5. Copy nguyên chuỗi JSON đó, quay lại bot bấm '
+            '<b>➕ Thêm tài khoản</b> rồi dán vào.\n\n'
+            '🔁 Làm lại bước 2–5 với từng tài khoản Google muốn gộp.\n\n'
+            '💡 Token có <code>refresh_token</code> nên dùng lâu dài; bot tự làm mới khi cần.\n'
+            '⚠️ Token này cho phép đọc/ghi Drive của tài khoản — chỉ dán trong chat riêng với bot, '
+            'sau đó nên xóa tin nhắn chứa token.')
+
+
+def gdrive_add_text():
+    return ('➕ <b>THÊM TÀI KHOẢN GOOGLE DRIVE</b>\n\n'
+            'Gửi <b>chuỗi JSON</b> token (tin nhắn tiếp theo), lấy bằng lệnh:\n'
+            '<code>rclone authorize "drive"</code>\n\n'
+            'Chuỗi cần có <code>access_token</code> và <code>refresh_token</code>. '
+            'Bot sẽ kiểm tra dung lượng rồi lưu tài khoản.\n'
+            '• Gõ /cancel để bỏ qua.')
+
+
+def backup_target_text(remote, label, has_gdrive):
+    txt = f"☁️ Đích backup: <b>{esc(label)}</b> (<code>{esc(remote)}:</code>)"
+    if has_gdrive:
+        txt += '\n　└ bấm nút "Đích" để đổi giữa OneDrive và Google Drive gộp'
+    return txt
 
 
 # ============================ keepalive ============================
@@ -721,35 +826,54 @@ def vm_confirm_kb(action):
 # ============================ Restore ============================
 
 def restore_list_text(folders):
-    lines = ['📥 <b>KHÔI PHỤC TỪ ONEDRIVE</b>', '']
+    lines = ['📥 <b>KHÔI PHỤC TỪ ONEDRIVE / GOOGLE DRIVE</b>', '']
     if not folders:
-        lines.append('Không thấy thư mục <code>data_backup*</code> nào trên OneDrive.')
+        lines.append('Không thấy thư mục <code>data_backup*</code> nào trên cloud.')
         return '\n'.join(lines)
     lines.append('Chọn bản backup để khôi phục:')
     for i, f in enumerate(folders[:8]):
-        lines.append(f"　{i + 1}. <code>{esc(f)}</code>")
+        lines.append(f"　{i + 1}. <code>{esc(_fld(f))}</code> — {esc(_flabel(f))}")
     lines.append('')
     lines.append('⚠️ Khôi phục sẽ <b>ghi đè</b> dữ liệu VM hiện tại.')
     return '\n'.join(lines)
 
 
+def _fld(x):
+    return x.get('folder') if isinstance(x, dict) else str(x)
+
+
+def _flabel(x):
+    if isinstance(x, dict):
+        return x.get('label') or ('Google Drive' if x.get('remote') != 'onedrive' else 'OneDrive')
+    return 'OneDrive'
+
+
+def _fremote(x):
+    if isinstance(x, dict):
+        return x.get('remote') or 'onedrive'
+    return 'onedrive'
+
+
 def restore_list_kb(folders):
     rows = []
     for i in range(0, min(len(folders), 8), 2):
-        row = [('📁 ' + shorten(folders[i], 20), f'rst:pk:{i}')]
+        row = [('📁 ' + shorten(_fld(folders[i]), 18), f'rst:pk:{i}')]
         if i + 1 < min(len(folders), 8):
-            row.append(('📁 ' + shorten(folders[i + 1], 20), f'rst:pk:{i + 1}'))
+            row.append(('📁 ' + shorten(_fld(folders[i + 1]), 18), f'rst:pk:{i + 1}'))
         rows.append(row)
-    rows.append([('🔄 Quét lại OneDrive', 'rst:scan'), ('🏠 Trang chính', 'home')])
+    rows.append([('🔄 Quét lại cloud', 'rst:scan'), ('🏠 Trang chính', 'home')])
     return kb(rows)
 
 
-def restore_confirm_text(folder, img_bytes):
+def restore_confirm_text(folder, img_bytes, remote_label='OneDrive'):
+    remote = _fremote(folder)
+    name = _fld(folder)
+    label = remote_label or _flabel(folder)
     lines = ['📥 <b>XÁC NHẬN KHÔI PHỤC</b>', '',
-             f"📦 Nguồn: <code>onedrive:{esc(folder)}/parts/</code>"]
+             f"📦 Nguồn: <code>{esc(remote)}:{esc(name)}/parts/</code> — <b>{esc(label)}</b>"]
     if img_bytes > 0:
         lines.append(f"⚠️ Codespace đang có <b>data.img {fmt_bytes(img_bytes)}</b> — "
-                     'quá trình khôi phục sẽ <b>GHI ĐÈ</b> bằng bản trên OneDrive.')
+                     'quá trình khôi phục sẽ <b>GHI ĐÈ</b> bằng bản trên cloud.')
     lines.append('')
     lines.append('Quy trình: tải parts → ghép archive → kiểm tra zstd → giải nén vào /mnt/data '
                  '(tự dừng VM để an toàn) → dọn file tạm.')
@@ -763,7 +887,8 @@ def restore_confirm_kb(idx):
 
 # ============================ Backup ============================
 
-def backup_confirm_text(cfg, keep_local, restart_vm, probe):
+def backup_confirm_text(cfg, keep_local, restart_vm, probe, remote='onedrive',
+                        remote_label='OneDrive', can_toggle=False):
     lines = ['💾 <b>XÁC NHẬN BACKUP</b>', '']
     if probe:
         lines.append(f"• VM container: <b>{esc(VM_STATE_VN.get(probe.get('container'), probe.get('container')))}</b>"
@@ -774,22 +899,29 @@ def backup_confirm_text(cfg, keep_local, restart_vm, probe):
         if probe.get('lock_busy'):
             lines.append('• ⏳ <b>Đang có backup khác chạy</b> — chờ xong rồi hãy chạy.')
     lines.append('')
+    lines.append(backup_target_text(remote, remote_label, can_toggle))
+    lines.append('')
     lines.append('Quy trình: dừng VM an toàn (ACPI) → nén toàn bộ /mnt/data bằng zstd → '
-                 'chia 1GB/part → upload <code>onedrive:data_backup_&lt;ngày giờ&gt;/parts/</code> '
+                 'chia 1GB/part → upload '
+                 f'<code>{esc(remote)}:data_backup_&lt;ngày giờ&gt;/parts/</code> '
                  '→ rclone check → bật lại VM.')
     lines.append('')
     lines.append('💡 Có thể hủy an toàn ở ranh giới từng bước.')
     return '\n'.join(lines)
 
 
-def backup_confirm_kb(keep_local, restart_vm):
+def backup_confirm_kb(keep_local, restart_vm, remote='onedrive', remote_label='OneDrive',
+                      can_toggle=False):
     local_txt = 'BẬT' if keep_local else 'TẮT'
     restart_txt = 'BẬT' if restart_vm else 'TẮT'
-    return kb([
+    rows = [
         [(f"🗄 Giữ bản local: {local_txt}", f"bk:l:{0 if keep_local else 1}"),
          (f"⏯ Tự bật lại VM: {restart_txt}", f"bk:r:{0 if restart_vm else 1}")],
-        [('💾 Backup ngay', 'bk:go'), ('❌ Hủy', 'home')],
-    ])
+    ]
+    if can_toggle:
+        rows.append([(f"☁️ Đích: {remote_label} (đổi)", 'bk:t')])
+    rows.append([('💾 Backup ngay', 'bk:go'), ('❌ Hủy', 'home')])
+    return kb(rows)
 
 
 # ============================ Cleanup / khác ============================

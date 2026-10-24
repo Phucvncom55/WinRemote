@@ -371,6 +371,11 @@ class GhCli:
         return self.run(['codespace', 'ports', 'visibility', spec, '-c', name], timeout=90)
 
 
+GRAPH_DRIVE_URL = 'https://graph.microsoft.com/v1.0/me/drive'
+GDRIVE_ABOUT_URL = ('https://www.googleapis.com/drive/v3/about'
+                    '?fields=user(emailAddress,displayName),storageQuota(limit,usage)')
+
+
 def graph_drive_info(token_json_text):
     """Kiểm tra token OneDrive trực tiếp qua Microsoft Graph.
 
@@ -402,4 +407,45 @@ def graph_drive_info(token_json_text):
         'total': int(q.get('total') or 0),
         'used': int(q.get('used') or 0),
         'drive_type': str(d.get('driveType') or ''),
+    }, None
+
+
+def gdrive_info(token_json_text):
+    """Kiểm tra token Google Drive trực tiếp qua Drive API v3.
+
+    Trả về (info, error). info = {'owner','total','used'} khi OK.
+    """
+    try:
+        tok = json.loads((token_json_text or '').strip())
+    except ValueError as e:
+        return None, f'Token không phải JSON hợp lệ ({e}).'
+    if not isinstance(tok, dict):
+        return None, 'Token phải là đối tượng JSON (rclone authorize drive).'
+    access = str(tok.get('access_token') or '')
+    if not access:
+        return None, 'Token thiếu access_token.'
+    req = urllib.request.Request(GDRIVE_ABOUT_URL,
+                                 headers={'Authorization': 'Bearer ' + access})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            d = json.loads(resp.read().decode('utf-8'))
+    except Exception as e:  # noqa
+        has_refresh = bool(tok.get('refresh_token'))
+        extra = '' if has_refresh else \
+            ' (token thiếu refresh_token nên rclone sẽ hết hạn sau ~1 giờ)'
+        return None, f'Google Drive API từ chối token: {e}.{extra}'
+    user = d.get('user') or {}
+    quota = d.get('storageQuota') or {}
+    try:
+        total = int(quota.get('limit') or 0)
+    except (TypeError, ValueError):
+        total = 0
+    try:
+        used = int(quota.get('usage') or 0)
+    except (TypeError, ValueError):
+        used = 0
+    return {
+        'owner': user.get('emailAddress') or user.get('displayName') or '',
+        'total': total,
+        'used': used,
     }, None

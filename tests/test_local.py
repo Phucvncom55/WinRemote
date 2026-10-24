@@ -889,6 +889,108 @@ def test_keepalive_log_callable():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+
+def test_gdrive_flow():
+    env = Env()
+    try:
+        env.configure()
+        from bot import gh as ghmod
+        orig = ghmod.gdrive_info
+        ghmod.gdrive_info = lambda t: (
+            {'owner': 'gd1@example.com', 'total': 15 * 1024 ** 3, 'used': 1024 ** 3}, None)
+        try:
+            env.send('/gdrive')
+            env.wait('GOOGLE DRIVE — GỘP')
+            env.cb('gd:add', mid=1200)
+            env.wait('THÊM TÀI KHOẢN GOOGLE DRIVE')
+            env.send('{"access_token":"a1","refresh_token":"r1"}', mid=3)
+            env.wait('Đã thêm')
+        finally:
+            ghmod.gdrive_info = orig
+        accs = env.cfg.gdrive_accounts
+        assert len(accs) == 1 and accs[0]['owner'] == 'gd1@example.com'
+        assert env.cfg.gdrive_total()[0] == 15 * 1024 ** 3
+
+        # chọn Google Drive làm đích backup
+        env.cb('gd:use', mid=1201)
+        env.wait('Google Drive (gộp)')
+        assert env.cfg.get('backup_backend') == 'gdrive'
+
+        # màn backup hiển thị đích + đổi được sang OneDrive
+        env.send('/backup')
+        e = env.wait('Đích backup')
+        assert 'Google Drive' in e['text']
+        env.cb('bk:t', mid=1202)
+        env.wait('OneDrive')
+        env.cfg.set('backup_backend', 'gdrive')
+
+        # restore quét cả 2 cloud
+        env.remote.add('rclone lsd', out=RCL_LSD)
+        env.send('/restore')
+        e2 = env.wait('KHÔI PHỤC TỪ ONEDRIVE', timeout=20)
+        assert 'Google Drive' in e2['text']
+    finally:
+        env.cleanup()
+
+
+def test_keepalive_supervisor():
+    """Keepalive thật sự mở phiên, đọc log và tự đổi khi cấu hình thay đổi."""
+    import subprocess
+    tmp = tempfile.mkdtemp(prefix='wmtest_kasup_')
+    try:
+        cfg = cfgmod.Config(os.path.join(tmp, 'cfg.json'))
+        cfg.set('github_token', 'ghp_test')
+        cfg.set('codespace', 'cs-one')
+        cfg.set('keepalive_enabled', True)
+        cfg.set('keepalive_interval', 15)
+
+        class KaGh:
+            def codespace_state(self, name):
+                return 'Available'
+
+            def ensure_ssh_registered(self):
+                return True, 'ok'
+
+            def spawn(self, args):
+                script = ('echo KA_HOST=cs-one; '
+                          'echo "KA_BEAT 2026-10-24T00:00:00Z"; '
+                          'while true; do sleep 0.2; echo "KA_BEAT tick"; done')
+                return subprocess.Popen(['bash', '-c', script],
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, encoding='utf-8')
+
+        ka = ka_mod.Keepalive(KaGh(), cfg, logging.getLogger('ka-sup'),
+                              log_path=os.path.join(tmp, 'ka.log'))
+        ka.start()
+        try:
+            snap = {}
+            t0 = time.time()
+            while time.time() - t0 < 10:
+                snap = ka.snapshot()
+                if snap.get('beats', 0) >= 2 and snap.get('target') == 'cs-one':
+                    break
+                time.sleep(0.05)
+            assert snap.get('target') == 'cs-one', snap
+            assert snap.get('host') == 'cs-one', snap
+            assert snap.get('beats', 0) >= 2, snap
+            assert snap.get('state') == 'running', snap
+            assert 'KA_BEAT' in ka.read_logfile()
+
+            # đổi codespace -> phiên cũ phải đóng, phiên mới mở
+            cfg.set('codespace', 'cs-two')
+            t0 = time.time()
+            while time.time() - t0 < 10:
+                snap = ka.snapshot()
+                if snap.get('target') == 'cs-two':
+                    break
+                time.sleep(0.05)
+            assert snap.get('target') == 'cs-two', snap
+        finally:
+            ka.stop()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 TESTS = [
     test_claim_status,
     test_nonowner_ignored,
@@ -908,6 +1010,8 @@ TESTS = [
     test_cs_create_flow,
     test_actions_flow,
     test_keepalive_log_callable,
+    test_gdrive_flow,
+    test_keepalive_supervisor,
 ]
 
 
