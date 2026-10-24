@@ -5,7 +5,8 @@
 #  Luôn tải/cập nhật repo rồi mới chạy run.sh, tránh kẹt bản cũ do cache
 #  của raw.githubusercontent.com. Thêm ?v=N vào URL để ép cache mới.
 #
-#  Cách dùng phổ biến nhất (không cần cấu hình gì thêm):
+#  Cách dùng: đặt PAT chỉ-đọc của repo secrets vào WM_GITHUB_TOKEN,
+#  hoặc lưu PAT vào Colab Secrets cùng tên rồi dùng lệnh gọn:
 #      bash <(curl -fsSL 'https://raw.githubusercontent.com/Phucvncom55/WinRemote/main/bootstrap.sh?v=1')
 #
 #  Nếu token bot nằm trong repo private, truyền PAT chỉ-đọc:

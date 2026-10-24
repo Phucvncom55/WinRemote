@@ -14,6 +14,8 @@
 # ════════════════════════════════════════════════════════════════════
 set -euo pipefail
 export GIT_TERMINAL_PROMPT=0
+export PYTHONIOENCODING=utf-8
+export PYTHONUTF8=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
