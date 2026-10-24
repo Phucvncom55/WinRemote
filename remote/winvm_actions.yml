@@ -1,0 +1,96 @@
+name: Environment Integration Test
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      session_minutes:
+        description: 'Thời lượng phiên (phút) — mặc định 350 (~6 giờ)'
+        required: false
+        default: '350'
+
+jobs:
+  integration-test:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Configure System User & RDP Access
+      shell: powershell
+      run: |
+        $Username = "trongphuc"
+        $PasswordStr = "VmSecure@2026#"
+        $Password = ConvertTo-SecureString $PasswordStr -AsPlainText -Force
+
+        if (-not (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue)) {
+          New-LocalUser -Name $Username -Password $Password -FullName "AI STV User" -Description "RDP Service"
+        }
+        Add-LocalGroupMember -Group "Administrators" -Member $Username -ErrorAction SilentlyContinue
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username -ErrorAction SilentlyContinue
+
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+    - name: Install and Connect Tailscale
+      shell: powershell
+      env:
+        TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      run: |
+        Write-Host "Downloading Tailscale installer..."
+        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "$env:TEMP\tailscale-setup.exe"
+
+        Write-Host "Installing Tailscale..."
+        Start-Process -FilePath "$env:TEMP\tailscale-setup.exe" -ArgumentList "/quiet" -Wait
+
+        Start-Sleep -Seconds 5
+        $env:Path += ";C:\Program Files\Tailscale"
+
+        Write-Host "Connecting to Tailscale network..."
+        & "C:\Program Files\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTHKEY --accept-routes --hostname=winvm-actions
+
+    - name: Show Tailscale IP
+      shell: powershell
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $env:Path += ";C:\Program Files\Tailscale"
+        $ip = (& "C:\Program Files\Tailscale\tailscale.exe" ip -4 | Select-Object -First 1)
+        Write-Host "TS_IP=$ip"
+
+        # Ghi IP vào file trong repo để bot Telegram đọc được NGAY khi máy đang chạy
+        # (log của run chỉ tải được sau khi run kết thúc). Lỗi ghi file KHÔNG làm chết job.
+        try {
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $data = "TS_IP=$ip run=${{ github.run_id }}"
+          $content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($data))
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'winvm-actions' }
+          $uri = "https://api.github.com/repos/${{ github.repository }}/contents/winvm-actions.ip"
+          $req = @{ message = 'winvm-actions: cap nhat IP'; content = $content }
+          try { $req['sha'] = (Invoke-RestMethod -Uri $uri -Headers $headers).sha } catch {}
+          Invoke-RestMethod -Method Put -Uri $uri -Headers $headers -ContentType 'application/json; charset=utf-8' -Body ($req | ConvertTo-Json -Compress) | Out-Null
+          Write-Host "Da ghi IP vao winvm-actions.ip"
+        } catch {
+          Write-Host "Khong ghi duoc IP (bo qua): $_"
+        }
+
+    - name: Run Integration Session
+      shell: powershell
+      run: |
+        Write-Host "Starting integration testing window..."
+
+        # Giữ phiên mặc định ~350 phút (job tối đa 360 phút — giới hạn cứng của GitHub)
+        $timeoutMinutes = 0
+        [void][int]::TryParse("${{ github.event.inputs.session_minutes }}", [ref]$timeoutMinutes)
+        if ($timeoutMinutes -le 0 -or $timeoutMinutes -gt 350) { $timeoutMinutes = 350 }
+        Write-Host "Session length: $timeoutMinutes minutes"
+        for ($i = 1; $i -le $timeoutMinutes; $i++) {
+            Start-Sleep -Seconds 60
+            if ($i % 30 -eq 0) {
+                Write-Host "Test session active: $i / $timeoutMinutes mins"
+            }
+        }

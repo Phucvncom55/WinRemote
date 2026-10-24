@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.log
+
+# Dữ liệu chạy (bot-config.json, khóa SSH, gh config...)
+data/
+
+# Bí mật: không bao giờ commit vào repo code công khai.
+# Token thật nằm ở repo private riêng (xem README).
+.env
+.env.*
+secrets/*
+!secrets/README.md
+
+# Bản cũ / cache lớn
+legacy/
+tests/.cache/
+.pytest_cache/
