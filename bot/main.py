@@ -85,7 +85,8 @@ def main():
     gh = GhCli(cfg, data_dir)
     remote = Remote(gh, cfg)
     engine = Engine(cfg, tg, gh, remote, None, log)
-    ka = Keepalive(gh, cfg, log, notify=engine.notify_owner)
+    ka = Keepalive(gh, cfg, log, notify=engine.notify_owner,
+                   log_path=os.path.join(data_dir, 'keepalive.log'))
     engine.ka = ka
     ka.start()
 

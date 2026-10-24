@@ -235,6 +235,12 @@ class FakeGh:
     def spawn(self, args):
         raise RuntimeError('spawn không dùng trong test')
 
+    def ssh(self, name, cmd, timeout=60, input_text=None):
+        self.ssh_targets = getattr(self, 'ssh_targets', [])
+        self.ssh_targets.append(name)
+        return GhResult(0, f'KA_TARGET={name}\nKA_DATE=2026-10-24T10:00:00Z\n'
+                           f'KA_WORKSPACE=/workspaces/winvm', '')
+
 
 class FakeRemote:
     def __init__(self, cfg, gh):
@@ -469,6 +475,23 @@ def test_settings_flows():
         env.cb('set:csp:0', mid=105)
         env.wait('Đã chọn Codespace')
         assert env.cfg.get('codespace') == 'winvm-cs'
+    finally:
+        env.cleanup()
+
+
+def test_keepalive_log_view():
+    env = Env()
+    try:
+        env.configure()
+        env.gh.ssh_targets = []
+        env.send('/kalog')
+        env.wait('KEEPALIVE — NHẬT KÝ')
+        env.wait('Codespace đích')
+        env.cb('ka:test', mid=960)
+        e = env.wait('KA_TARGET=winvm-cs', timeout=20)
+        assert env.gh.ssh_targets == ['winvm-cs']
+        env.cb('ka:clear', mid=961)
+        env.wait('Keepalive')
     finally:
         env.cleanup()
 
@@ -784,6 +807,7 @@ TESTS = [
     test_nonowner_ignored,
     test_settings_flows,
     test_repo_flow,
+    test_keepalive_log_view,
     test_backup_flow,
     test_backup_cancel,
     test_restore_flow,

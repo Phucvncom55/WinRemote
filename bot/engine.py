@@ -206,6 +206,18 @@ class Engine:
         text, k = ui.account_text(self.cfg, self.ka.snapshot() if self.ka else None)
         self.tg.send_message(chat_id, text, buttons=k)
 
+    def cmd_kalog(self, chat_id, args):
+        self.show_keepalive(chat_id)
+
+    def show_keepalive(self, chat_id, mid=None):
+        snap = self.ka.snapshot() if self.ka else {}
+        text = ui.keepalive_text(self.cfg, snap)
+        k = ui.keepalive_kb(self.cfg)
+        if mid:
+            self.tg.edit_message(chat_id, mid, text, buttons=k)
+        else:
+            self.tg.send_message(chat_id, text, buttons=k)
+
     def cmd_onedrive(self, chat_id, args):
         if args.strip():
             self._apply_od_token(chat_id, args.strip(), None)
@@ -521,6 +533,8 @@ class Engine:
                     self.start_job('Dọn rác', chat_id, self.worker_cleanup)
                 else:
                     self.show_cleanup(chat_id, mid=mid)
+            elif head == 'ka':
+                self._cb_keepalive(chat_id, mid, p)
             elif head == 'job':
                 msg2 = self.jobs.cancel(chat_id)
                 self.tg.answer_callback(qid, msg2[:190])
@@ -682,6 +696,53 @@ class Engine:
             self.start_job('Xóa container VM', chat_id, self.worker_vm_rm)
         elif act == 'ports':
             self.start_job('Mở cổng public', chat_id, self.worker_ports)
+
+    def _cb_keepalive(self, chat_id, mid, p):
+        act = p[1] if len(p) > 1 else 'log'
+        if act in ('log', 'r'):
+            self.show_keepalive(chat_id, mid=mid)
+        elif act == 'test':
+            self.start_job('Test keepalive', chat_id, self.worker_ka_test)
+        elif act == 'clear':
+            if self.ka:
+                try:
+                    self.ka.clear_log()
+                except Exception:
+                    pass
+            self.show_keepalive(chat_id, mid=mid)
+
+    def worker_ka_test(self, ctx):
+        snap = self.ka.snapshot() if self.ka else {}
+        cs = self.cfg.get('codespace') or ''
+        ctx.edit('🧪 <b>TEST KEEPALIVE</b> — đang mở SSH tới Codespace…', force=True)
+        if not cs:
+            raise JobError('Chưa chọn Codespace — mở /settings trước.')
+        if not self.cfg.has_github:
+            raise JobError('Chưa có GitHub token — mở /settings trước.')
+        try:
+            st = self.remote.state()
+        except Exception as e:  # noqa
+            st = f'lỗi: {e}'
+        if st != 'Available':
+            raise JobError(f'Codespace đang <b>{esc(st)}</b> — cần Available để test. '
+                           'Bấm "Bật Codespace" ở /status rồi thử lại.')
+        try:
+            self.gh.ensure_ssh_registered()
+        except Exception:
+            pass
+        cmd = ('echo "KA_TARGET=$(hostname)"; '
+               'echo "KA_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; '
+               'echo "KA_WORKSPACE=$(pwd)"; '
+               'echo "KA_CS_NAME=' + cs.replace('"', '') + '"')
+        r = self.gh.ssh(cs, cmd, timeout=120)
+        out = ((r.out or '') + '\n' + (r.err or '')).strip()
+        ok = r.ok and 'KA_TARGET=' in out
+        snap2 = self.ka.snapshot() if self.ka else snap
+        res = {'ok': ok, 'rc': r.rc, 'out': out[-1500:],
+               'error': '' if ok else ('SSH không trả về dữ liệu — kiểm tra log keepalive / '
+                                       'token / trạng thái Codespace.')}
+        ctx.edit(ui.keepalive_test_text(self.cfg, snap2, res),
+                 buttons=ui.keepalive_test_kb(), force=True)
 
     def _cb_actions(self, chat_id, mid, p):
         act = p[1] if len(p) > 1 else 'menu'

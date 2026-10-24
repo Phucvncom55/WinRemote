@@ -106,6 +106,7 @@ def h_help():
             '📡 /ssh &lt;lệnh&gt; — chạy bash trong Codespace.\n'
             '🧹 /cleanup — dọn file tạm (~88GB sau restore).\n'
             '🖥 /actions — mở máy Windows tạm trên GitHub Actions (RDP qua Tailscale, ~6 tiếng).\n'
+            '🔄 /kalog — xem log keepalive + test SSH đúng Codespace.\n'
             '✖️ /cancel — hủy việc đang chạy.\n'
             '\n' + DISCLAIMER)
 
@@ -186,7 +187,7 @@ def status_kb(cfg, cs_state, probe, act=None):
     alt = '☁️ Máy Actions'
     if act and act.get('status') in ACT_ACTIVE:
         alt += ' 🟢'
-    rows = [[('🔄 Làm mới', 'st:r'), ('⚙️ Cài đặt', 'set:menu')]]
+    rows = [[('🔄 Làm mới', 'st:r'), ('⚙️ Cài đặt', 'set:menu'), ('📜 KA log', 'ka:log')]]
     if cfg.has_codespace:
         if cs_state == 'Available':
             rows.append([('⏹ Dừng Codespace', 'st:csstop')])
@@ -232,6 +233,7 @@ def settings_kb(cfg):
         [('🆕 Tạo Codespace mới (4c/16G/32G)', 'set:csnew')],
         [(f"🔄 Keepalive: {ka}", 'set:ka'),
          (f"⏱ {cfg.get('keepalive_interval')}s", 'set:kaint')],
+        [('📜 Log keepalive', 'ka:log'), ('🧪 Test keepalive', 'ka:test')],
         [(f"🖥 VM: {vm['cores']}c/{vm['ram_gb']}G/{vm['disk_gb']}G", 'set:vmmenu')],
         [('👤 Tài khoản', 'set:acc'), ('🖥 VM Actions', 'act:menu'), ('🏠 Trang chính', 'home')],
     ])
@@ -285,6 +287,100 @@ def repo_list_kb(repos):
         rows.append([(f"{i + 1}. {shorten(name, 34)}", f'set:repop:{i}')])
     rows.append([('⬅️ Repo', 'set:repo'), ('🏠 Trang chính', 'home')])
     return kb(rows)
+
+
+# ============================ keepalive ============================
+
+def _since_txt(ts):
+    if not ts:
+        return '—'
+    try:
+        d = int(max(0, datetime.datetime.now().timestamp() - float(ts)))
+    except Exception:
+        return '—'
+    if d < 60:
+        return f'{d}s'
+    if d < 3600:
+        return f'{d // 60}m{d % 60:02d}s'
+    return f'{d // 3600}h{(d % 3600) // 60:02d}m'
+
+
+def keepalive_text(cfg, snap):
+    snap = snap or {}
+    lines = ['🔄 <b>KEEPALIVE — NHẬT KÝ & CHẨN ĐOÁN</b>', '']
+    lines.append(f"• Trạng thái: <b>{esc(snap.get('state') or 'off')}</b>")
+    lines.append(f"• Bật/tắt: {'BẬT 🟢' if cfg.get('keepalive_enabled') else 'TẮT ⚪'}"
+                 f" • chu kỳ {cfg.get('keepalive_interval')}s")
+    target = snap.get('target') or cfg.get('codespace') or '(chưa có)'
+    lines.append(f"• Codespace đích: <code>{esc(target)}</code>")
+    cs = cfg.get('codespace') or ''
+    if cs and target and cs != target:
+        lines.append('　└ ⚠️ KHÁC codespace đang chọn — bật/tắt keepalive để mở phiên mới.')
+    pid = snap.get('pid') or 0
+    lines.append(f"• Tiến trình SSH: {'pid ' + str(pid) if pid else 'chưa chạy'}"
+                 f" • đã chạy {_since_txt(snap.get('since'))}")
+    lines.append(f"• Dòng cuối: <code>{esc(str(snap.get('last_line') or '—')[:120])}</code>")
+    if snap.get('last_output_ts'):
+        lines.append(f"• Nhận log cách đây: {_since_txt(snap.get('last_output_ts'))}")
+    if snap.get('command'):
+        lines.append(f"• Lệnh: <code>{esc(str(snap.get('command'))[:180])}</code>")
+    if snap.get('last_error'):
+        lines.append(f"• ⚠️ Lỗi gần nhất: {esc(str(snap.get('last_error'))[:220])}")
+    raw = list(snap.get('lines') or [])
+    lines.append('')
+    lines.append('📜 <b>Log gần nhất</b> (bot ↔ SSH):')
+    if raw:
+        tail = [str(x)[:180] for x in raw[-14:]]
+        lines.append('<pre>' + esc('\n'.join(tail)) + '</pre>')
+    else:
+        lines.append('<i>Chưa có log — keepalive chưa kết nối SSH lần nào.</i>')
+    lines.append('')
+    lines.append('💡 "Test keepalive" mở một phiên SSH mới tới đúng Codespace đang chọn, '
+                 'in hostname + giờ máy để xác nhận.')
+    return '\n'.join(lines)
+
+
+def keepalive_kb(cfg):
+    ka = 'TẮT' if cfg.get('keepalive_enabled') else 'BẬT'
+    return kb([
+        [('🔁 Làm mới log', 'ka:log'), ('🧪 Test keepalive', 'ka:test')],
+        [(f"🔄 {ka} keepalive", 'set:ka'), ('🗑 Xóa log', 'ka:clear')],
+        [('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')],
+    ])
+
+
+def keepalive_test_text(cfg, snap, res):
+    snap = snap or {}
+    res = res or {}
+    lines = ['🧪 <b>TEST KEEPALIVE</b>', '']
+    lines.append(f"• Codespace đang chọn: <code>{esc(cfg.get('codespace') or '(chưa chọn)')}</code>")
+    lines.append(f"• Keepalive đích: <code>{esc(snap.get('target') or '(chưa chạy)')}</code>")
+    ok = bool(res.get('ok'))
+    lines.append(f"• Kết quả SSH: {'✅ OK' if ok else '❌ LỖI'} (rc={esc(res.get('rc'))})")
+    out = str(res.get('out') or '').strip()
+    if out:
+        lines.append('')
+        lines.append('<pre>' + esc(out[:1500]) + '</pre>')
+    if res.get('error'):
+        lines.append('')
+        lines.append('⚠️ ' + esc(str(res.get('error'))[:500]))
+    if ok:
+        lines.append('')
+        lines.append('✅ Lệnh được chạy trên đúng Codespace đang chọn. Nếu log keepalive có dòng '
+                     '<code>ssh&gt; ...</code> cập nhật đều thì keepalive đang hoạt động.')
+    else:
+        lines.append('')
+        lines.append('💡 Kiểm tra: GitHub token còn hạn/đủ scope <code>codespace</code>, '
+                     'SSH key đã đăng ký (bot tự làm), Codespace đang <b>Available</b>.')
+    return '\n'.join(lines)
+
+
+def keepalive_test_kb():
+    return kb([
+        [('📜 Log keepalive', 'ka:log'), ('🧪 Test lại', 'ka:test')],
+        [('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')],
+    ])
+
 
 
 
