@@ -210,8 +210,8 @@ class Keepalive:
         remote_cmd = (
             'echo KA_HOST="$(hostname)"; '
             'echo "KA_CODE=$PWD"; '
-            'while true; do echo "KA_BEAT $(date -u +%Y-%m-%dT%H:%M:%SZ)"; sleep %d; done'
-            % interval)
+            'while true; do echo "KA_BEAT $(date -u +%Y-%m-%dT%H:%M:%SZ)"; '
+            'sleep ' + str(interval) + '; done')
         self._log(f'keepalive: mở SSH -> {name} (nhịp {interval}s)')
         self.attempts += 1
         try:
@@ -285,9 +285,16 @@ class Keepalive:
         try:
             if p.poll() is None:
                 try:
-                    p.wait(timeout=8)
-                except Exception:
                     p.terminate()
+                except Exception:
+                    pass
+            try:
+                p.wait(timeout=5)
+            except Exception:
+                try:
+                    p.kill()
+                except Exception:
+                    pass
             rc = p.returncode
         except Exception:
             rc = None
@@ -298,6 +305,17 @@ class Keepalive:
         elapsed = time.time() - self.connected_ts if self.connected_ts else 0
         msg = f'keepalive: phiên SSH kết thúc ({exit_reason}, rc={rc}) sau {int(elapsed)}s'
         self._log(msg)
+
+        # Thoát do người dùng đổi cấu hình: không coi là lỗi, mở phiên mới ngay.
+        if exit_reason in ('đã tắt keepalive', 'đổi Codespace', 'bot dừng'):
+            self.last_error = ''
+            self._set('off' if exit_reason == 'đã tắt keepalive'
+                      else ('đang chuyển Codespace' if exit_reason == 'đổi Codespace'
+                            else 'off'))
+            if exit_reason != 'bot dừng':
+                self._wake.wait(2)
+                self._wake.clear()
+            return
 
         # SSH lỗi ngay (<30s) => log lỗi + thử đăng ký lại key ở vòng sau
         if self.connected_ts == 0 or elapsed < 30:
@@ -313,12 +331,7 @@ class Keepalive:
                          % (rc, tail[:150] if tail else ''), 'ka-sshfail', 3600)
             self._backoff(30)
         else:
-            if exit_reason in ('đã tắt keepalive', 'đổi Codespace', 'bot dừng'):
-                self._set('off' if exit_reason != 'đổi Codespace' else 'đang chuyển Codespace')
-                self._wake.wait(2)
-                self._wake.clear()
-            else:
-                self._backoff(5)
+            self._backoff(5)
 
     def _pump(self, p, q):
         try:
