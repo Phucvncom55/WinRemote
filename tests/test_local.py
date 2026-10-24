@@ -230,9 +230,10 @@ class FakeGh:
         self.secrets.append((repo, name, value))
         return GhResult(0, '', '')
 
-    def workflow_run(self, repo, wf):
+    def workflow_run(self, repo, wf, inputs=None):
         self.dispatched = getattr(self, 'dispatched', [])
         self.dispatched.append((repo, wf))
+        self.dispatch_inputs = inputs
         self.action_runs.insert(0, {
             'databaseId': 123, 'status': 'queued', 'conclusion': '',
             'url': 'https://github.com/phuc/winvm-codespace/actions/runs/123',
@@ -793,12 +794,18 @@ def test_actions_flow():
         env.cfg.set('owner_chat_id', OWNER)
         env.send('/actions')
         env.wait('VM WINDOWS TRÊN GITHUB ACTIONS')
+        # đổi runner sang Windows 2022
+        env.cb('act:ver:windows-2022', mid=899)
+        env.wait('Windows Server 2022')
         # Chưa có Tailscale key -> bot phải hỏi trước khi chạy
         env.cb('act:go', mid=900)
         env.wait('Tailscale auth key')
         env.send('tskey-auth-test123', mid=30)
         env.wait('ĐÃ KHỞI ĐỘNG VM ACTIONS', timeout=25)
         assert env.cfg.get('tailscale_key') == 'tskey-auth-test123'
+        assert env.cfg.get('actions_windows') == 'windows-2022'
+        assert env.gh.dispatch_inputs == {'windows_version': 'windows-2022',
+                                          'session_minutes': '350'}
         assert env.gh.dispatched == [('phuc/winvm-codespace', 'winvm-actions.yml')]
         assert env.gh.puts == [('phuc/winvm-codespace',
                                 '.github/workflows/winvm-actions.yml', 0)]

@@ -18,6 +18,8 @@ DEFAULTS = {
     'cs_repo': '',
     'cs_machine': 'standardLinux32gb',
     'tailscale_key': '',
+    'actions_windows': 'windows-2025',
+    'actions_minutes': 350,
     'keepalive_enabled': True,
     'keepalive_interval': 60,
     'quota_core_hours': 120,

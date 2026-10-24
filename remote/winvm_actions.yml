@@ -6,6 +6,14 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
+      windows_version:
+        description: 'Phiên bản Windows của runner'
+        required: true
+        type: choice
+        default: 'windows-2025'
+        options:
+          - windows-2025
+          - windows-2022
       session_minutes:
         description: 'Thời lượng phiên (phút) — mặc định 350 (~6 giờ)'
         required: false
@@ -13,7 +21,8 @@ on:
 
 jobs:
   integration-test:
-    runs-on: windows-latest
+    name: Windows VM (${{ inputs.windows_version }})
+    runs-on: ${{ inputs.windows_version }}
     timeout-minutes: 360
 
     steps:

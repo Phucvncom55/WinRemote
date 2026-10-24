@@ -529,7 +529,7 @@ class Engine:
     def show_actions(self, chat_id, mid=None):
         act = self.get_actions_snapshot(max_age=20.0)
         text = ui.actions_text(self.cfg, act)
-        k = ui.actions_kb()
+        k = ui.actions_kb(self.cfg)
         if mid:
             self.tg.edit_message(chat_id, mid, text, buttons=k)
         else:
@@ -923,6 +923,12 @@ class Engine:
     def _cb_actions(self, chat_id, mid, p):
         act = p[1] if len(p) > 1 else 'menu'
         if act in ('menu', 'r'):
+            self.show_actions(chat_id, mid=mid)
+        elif act == 'ver':
+            win = p[2] if len(p) > 2 else ''
+            if win in ('windows-2025', 'windows-2022'):
+                self.cfg.set('actions_windows', win)
+                self.tg.send_message(chat_id, f'✅ VM Actions sẽ dùng <b>{esc(win)}</b>.')
             self.show_actions(chat_id, mid=mid)
         elif act == 'go':
             if not self.cfg.get('tailscale_key'):
@@ -1363,9 +1369,14 @@ class Engine:
                                + esc(err[-200:]))
             raise JobError('Không đặt được secret: ' + esc(err[-300:]))
         ctx.edit('🚀 Đang gửi lệnh chạy workflow…', force=True)
+        win = str(self.cfg.get('actions_windows') or 'windows-2025')
+        if win not in ('windows-2025', 'windows-2022'):
+            win = 'windows-2025'
+        minutes = max(1, min(350, self._int_safe(self.cfg.get('actions_minutes'), 350)))
+        dispatch_inputs = {'windows_version': win, 'session_minutes': str(minutes)}
         r = None
         for _ in range(5):
-            r = self.gh.workflow_run(repo, wf_name)
+            r = self.gh.workflow_run(repo, wf_name, inputs=dispatch_inputs)
             if r.ok:
                 break
             ctx.sleep(10)
@@ -1401,7 +1412,8 @@ class Engine:
         rows.append([('🖥 Quản lý VM', 'vm:menu'), ('🏠 Trang chính', 'home')])
         ctx.edit('✅ <b>ĐÃ KHỞI ĐỘNG VM ACTIONS</b>\n'
                  f"• Repo: <code>{esc(repo)}</code>" + run_line +
-                 '\n• Máy: <code>windows-latest</code> — chạy tối đa ~6 tiếng (350 phút)\n'
+                 f"\n• Windows: <b>{'2025' if '2025' in win else '2022'}</b> "
+                 f"(<code>{esc(win)}</code>) — chạy tối đa ~6 tiếng (350 phút)\n"
                  '• RDP: user <b>trongphuc</b> • mật khẩu <code>VmSecure@2026#</code>\n'
                  '• Kết nối qua Tailscale: thiết bị <b>winvm-actions</b> — bấm "Trạng thái run" '
                  'sau ~1-2 phút để lấy IP (bot tự đọc), hoặc xem trong admin console Tailscale.',

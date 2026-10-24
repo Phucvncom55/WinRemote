@@ -332,8 +332,11 @@ class GhCli:
     def secret_set(self, repo, name, value):
         return self.run(['secret', 'set', name, '-R', repo, '-b', value], timeout=90)
 
-    def workflow_run(self, repo, wf):
-        return self.run(['workflow', 'run', wf, '-R', repo], timeout=120)
+    def workflow_run(self, repo, wf, inputs=None):
+        args = ['workflow', 'run', wf, '-R', repo]
+        for k, v in (inputs or {}).items():
+            args += ['-f', f'{k}={v}']
+        return self.run(args, timeout=120)
 
     def run_list(self, repo, wf=None, limit=5):
         args = ['run', 'list', '-R', repo, '--limit', str(int(limit)),

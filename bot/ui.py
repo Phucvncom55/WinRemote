@@ -688,8 +688,12 @@ def actions_text(cfg, act=None):
             lines.append('• IP Tailscale: ⏳ chưa thấy — máy đang khởi động, thử lại sau 1-2 phút.')
     else:
         lines.append('• Chưa có run nào gần đây — bấm 🚀 để khởi động.')
+    win = str(cfg.get('actions_windows') or 'windows-2025')
+    ver = '2025' if '2025' in win else '2022'
     lines.append('')
-    lines.append('ℹ️ Máy <code>windows-latest</code> (4 vCPU/16GB) • vào bằng <b>RDP qua Tailscale</b> • '
+    lines.append(f"• Phiên bản Windows: <b>Windows Server {ver}</b> (<code>{esc(win)}</code>)")
+    lines.append('• Hỗ trợ: <b>Windows 2025</b> và <b>Windows 2022</b> — đổi bằng nút bên dưới.')
+    lines.append('• Máy GitHub-hosted <b>4 vCPU / 16 GB RAM</b> • vào bằng <b>RDP qua Tailscale</b> • '
                  'sống tối đa <b>~6 tiếng</b>, hết giờ tự kết thúc.')
     lines.append(f"• Repo: <code>{esc(cfg.get('cs_repo') or '(sẽ tạo khi chạy)')}</code>")
     lines.append(f"• Tailscale key: {'✅ đã lưu' if cfg.get('tailscale_key') else '⛔ chưa có (bấm Khởi động sẽ được hỏi)'}")
@@ -697,10 +701,14 @@ def actions_text(cfg, act=None):
     return '\n'.join(lines)
 
 
-def actions_kb():
+def actions_kb(cfg=None):
+    win = str((cfg.get('actions_windows') if cfg else '') or 'windows-2025')
+    other = 'windows-2022' if '2025' in win else 'windows-2025'
+    other_txt = '2022' if '2025' in win else '2025'
     return kb([
         [('🚀 Khởi động VM Actions', 'act:go')],
         [('🔄 Trạng thái run', 'act:st'), ('🕘 Hủy run', 'act:cancel')],
+        [(f"🪟 Đổi sang Windows {other_txt}", f'act:ver:{other}')],
         [('🖥 Quản lý VM', 'vm:menu'), ('🏠 Trang chính', 'home')],
     ])
 
