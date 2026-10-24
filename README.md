@@ -52,21 +52,37 @@ Chọn các scope:
 
 > Token này nhập qua `/settings` trong Telegram, **không** nằm trong code.
 
-### 2.2. OneDrive token
+### 2.2. OneDrive token (tự động)
 
-Trên máy có trình duyệt:
+Không cần trình duyệt trên server:
+
+1. `/settings` → **☁️ OneDrive** → **Đăng nhập tự động**.
+2. Bot gửi link `microsoft.com/devicelogin` và mã 9 ký tự.
+3. Mở link trên điện thoại/máy tính, nhập mã, đăng nhập và bấm **Cho phép**.
+4. Bot tự poll, nhận `access_token` + `refresh_token`, kiểm tra dung lượng và lưu.
+
+Token có refresh token nên dùng lâu dài; bot tự làm mới khi gần hết hạn.
+Nếu muốn nhập tay, vẫn có thể chạy `rclone authorize onedrive` trên máy có trình duyệt
+rồi dán JSON vào `/settings`.
+
+### 2.3. Google Drive token (tùy chọn — gộp nhiều tài khoản)
+
+Dùng khi muốn backup sang Google Drive, hoặc gộp nhiều tài khoản thành một ổ lớn
+(xem `/gdrive`):
 
 ```bash
-rclone authorize onedrive
+rclone authorize "drive"
 ```
 
-Copy nguyên chuỗi JSON (`access_token` + `refresh_token`) để nhập vào `/settings`.
+Copy nguyên chuỗi JSON (`access_token` + `refresh_token`), rồi `/gdrive` →
+**➕ Thêm tài khoản** và dán vào. Làm lại với từng tài khoản Google muốn gộp;
+bot tạo `gdrive1..N` và một remote union `gdrive:` với tổng dung lượng.
 
-### 2.3. Telegram bot token
+### 2.4. Telegram bot token
 
 Tạo bot với [@BotFather](https://t.me/BotFather), lấy token dạng `123456:ABC...`.
 
-### 2.4. Hai repo GitHub
+### 2.5. Hai repo GitHub
 
 | Repo | Chế độ | Nội dung |
 |---|---|---|
@@ -135,12 +151,18 @@ Mở Telegram, gõ `/start`.
 
 1. **`/start`** — tin nhắn đầu tiên sẽ nhận quyền chủ bot (chỉ chat của bạn điều khiển được).
 2. **`/settings` → GitHub token** — dán classic token ở mục 2.1.
-3. **`/settings` → OneDrive token** — dán JSON `rclone authorize onedrive`.
+3. **`/settings` → OneDrive** — bấm **Đăng nhập tự động** rồi làm theo link + mã
+   (hoặc dán JSON `rclone authorize onedrive`).
 4. **`/settings` → Codespace** — chọn Codespace có sẵn, hoặc bấm **Tạo Codespace mới**
-   (máy 4 core / 16 GB RAM / 32 GB disk). Bot tự tạo repo private `winvm-codespace` nếu cần.
-5. **`/setup`** — mount ổ dữ liệu `/mnt/data`, cài rclone, nối OneDrive.
-6. **`/restore`** — chọn bản backup trên OneDrive (hoặc bỏ qua nếu muốn tạo VM mới).
+   (máy 4 core / 16 GB RAM / 32 GB disk). Nút **📦 Repo** cho phép tạo/đổi repo
+   `winvm-codespace` ngay trên màn hình trạng thái và hành động.
+5. **`/setup`** — mount ổ dữ liệu `/mnt/data`, cài rclone, nối OneDrive (và Google Drive
+   nếu đã thêm tài khoản).
+6. **`/restore`** — chọn bản backup trên OneDrive **hoặc** Google Drive (hoặc bỏ qua nếu muốn tạo VM mới).
 7. **`/vm` → Bật VM** — mở Web UI 8006 và RDP 3389.
+
+Tùy chọn: **`/gdrive`** để gộp nhiều tài khoản Google Drive, **`/quota`** để xem thời gian
+Codespace còn lại, **`/kalog`** để xem log keepalive.
 
 Mỗi lần đổi setting, bot tự đẩy `bot-config.json` lên repo secrets. Lần chạy Colab sau,
 `colab.py` tự khôi phục — không phải nhập lại token.
@@ -152,14 +174,18 @@ Mỗi lần đổi setting, bot tự đẩy `bot-config.json` lên repo secrets.
 | Lệnh | Chức năng |
 |---|---|
 | `/start` | Nhận quyền chủ bot / mở trang chính |
-| `/status` | Codespace, container, cổng, dung lượng, job, keepalive |
-| `/backup` | Dừng VM an toàn → nén zstd → chia 1 GB/part → upload OneDrive → kiểm tra → bật lại VM |
-| `/restore` | Quét OneDrive → chọn bản backup → tải → ghép → verify → giải nén vào `/mnt/data` |
+| `/status` | Codespace, container, cổng, dung lượng, job, keepalive, **quota còn lại** |
+| `/quota` | Tổng thời gian Codespace còn dùng được (chạy + treo), ngày làm mới, nhập số đã dùng thủ công |
+| `/backup` | Dừng VM an toàn → nén zstd → chia 1 GB/part → upload (OneDrive/Google Drive) → kiểm tra → bật lại VM |
+| `/restore` | Quét **cả** OneDrive và Google Drive → chọn bản backup → tải → ghép → verify → giải nén vào `/mnt/data` |
+| `/gdrive` | Gộp nhiều tài khoản Google Drive thành một remote union `gdrive:`; thêm/xóa/kiểm tra/đổi đích backup |
+| `/repo` | Chọn hoặc tạo repo private `winvm-codespace` cho Codespace và Actions |
 | `/vm` | Bật/tắt/restart/tạo lại/xóa container; đổi CPU/RAM/disk/Windows/user/password |
-| `/setup` | Mount `/mnt/data` + cài rclone + ghi `rclone.conf` + xác minh OneDrive |
+| `/setup` | Mount `/mnt/data` + cài rclone + ghi `rclone.conf` + xác minh OneDrive/Google Drive |
 | `/ssh <lệnh>` | Chạy bash trong Codespace; output dài gửi kèm file `.txt` |
 | `/cleanup` | Xóa parts/archive/log tạm trên Codespace |
-| `/actions` | Mở Windows tạm trên GitHub Actions (~6 giờ), RDP qua Tailscale |
+| `/actions` | Mở Windows tạm trên GitHub Actions (~6 giờ), RDP qua Tailscale; chọn runner **windows-2025** hoặc **windows-2022** |
+| `/kalog` | Log keepalive: đúng Codespace chưa, hostname trong phiên SSH, nhịp tim, lỗi gần nhất, nút gửi full log |
 | `/ports` | Mở public cổng 8006/3389 |
 | `/settings` | Token, Codespace, keepalive, cấu hình VM |
 | `/cancel` | Hủy job đang chạy (an toàn ở ranh giới bước) |
@@ -188,6 +214,30 @@ bình thường; chỉ mất khả năng khôi phục sau khi Colab reset.
 
 > Nếu dùng GitHub token fine-grained, phải cấp quyền **Contents: Read and write**
 > cho repo secrets, nếu không sync sẽ báo lỗi 403.
+
+### 6.1. Google Drive gộp nhiều tài khoản
+
+Mỗi tài khoản được lưu trong `gdrive_accounts` của `bot-config.json` (kèm
+`access_token`/`refresh_token`). Khi `/setup` hoặc `/gdrive → Kiểm tra`, bot ghi
+`rclone.conf` trên Codespace:
+
+```ini
+[gdrive1] type = drive ...
+[gdrive2] type = drive ...
+[gdrive]  type = union
+upstreams = gdrive1: gdrive2:
+create_policy = epmfs
+search_policy = ff
+```
+
+- Dung lượng hiển thị là **tổng** các tài khoản; file mới được ghi vào tài khoản
+  còn nhiều chỗ trống nhất (`epmfs`), nhưng **mỗi file nằm trọn trên một tài khoản**.
+- Union **không** làm tăng tốc độ; file lớn hơn dung lượng trống của tài khoản
+  được chọn sẽ lỗi.
+- Không xóa tài khoản khỏi `/gdrive` khi vẫn còn backup trên đó — bot cảnh báo
+  trước khi xóa, nhưng dữ liệu vẫn nằm trên Google Drive của bạn.
+- Token Google dùng client công khai của rclone; nếu bị thu hồi, chạy lại
+  `rclone authorize "drive"` và thêm lại tài khoản.
 
 ---
 
@@ -222,7 +272,9 @@ Vì vậy:
   đúng một dòng.
 
 Ngoài ra, GitHub Codespaces có quota (ví dụ 120 core-hours/tháng với tài khoản Free) và
-có thể tự dừng khi idle. Không dùng bot để vượt giới hạn của GitHub.
+có thể tự dừng khi idle. Dùng `/quota` để xem thời gian chạy/treo còn lại và ngày làm mới
+(bot lấy số liệu billing, có thể nhập tay nếu GitHub chưa cập nhật).
+Không dùng bot để vượt giới hạn của GitHub.
 
 ---
 
@@ -259,12 +311,16 @@ bot/
   sync.py             # đẩy config lên repo GitHub private
   engine.py           # router lệnh + job backup/restore/VM/Actions
   gh.py               # wrapper gh CLI + GitHub API
+  oauth.py            # device-code login OneDrive + refresh token Google
   remote.py           # chạy lệnh trên Codespace qua gh codespace ssh
   keepalive.py        # giữ Codespace không idle
   tg.py               # Telegram client (stdlib) + fake cho test
   ui.py               # nội dung tin nhắn/button
   util.py             # format, parse
 remote/               # script bash đẩy lên Codespace
+  02_rclone.sh        # ghi/merge rclone.conf (OneDrive, giữ nguyên section Drive)
+  10_gdrive.sh        # tạo gdrive1..N + remote union gdrive:
+  92_backup_once.sh   # upload/kiểm tra backup theo VM_BACKUP_REMOTE
 tests/test_local.py   # test engine với Telegram/gh giả
 secrets/README.md     # mô tả repo secrets (token thật không nằm ở đây)
 ```
@@ -281,7 +337,12 @@ secrets/README.md     # mô tả repo secrets (token thật không nằm ở đ�
 | `Token thiếu scope workflow` | Thêm scope `workflow` cho token GitHub |
 | `Codespace không Available` | Kiểm tra quota/billing GitHub Codespaces |
 | `SSH tới Codespace thất bại` | Bot tự tạo/đăng ký key; kiểm tra scope `admin:public_key` |
-| `OneDrive token hết hạn` | Chạy lại `rclone authorize onedrive`, nhập token mới |
+| `OneDrive token hết hạn` | `/settings` → OneDrive → **Đăng nhập tự động** lại, hoặc dán token mới |
+| `Google Drive token hết hạn/thu hồi` | `/gdrive` → xóa tài khoản lỗi → thêm lại bằng `rclone authorize "drive"` |
+| `Không thấy backup trên Drive` | `/restore` quét cả hai cloud; kiểm tra `/gdrive → Kiểm tra` và đích backup ở `/backup` |
+| `Keepalive không chạy` | `/kalog` xem hostname/target có đúng Codespace không, bấm **Khởi động lại**; kiểm tra scope `codespace` + `admin:public_key` |
+| `/quota` báo thiếu số liệu | GitHub chỉ cập nhật mỗi giờ; bấm **Nhập số đã dùng** để nhập tay từ trang billing |
+| Actions không chạy `windows-2022` | Repo phải có quyền Actions; thử lại với `windows-2025` hoặc kiểm tra workflow run |
 | `config sync lỗi 403` | Token GitHub không có quyền ghi repo secrets |
 | Colab báo hết RAM/ngắt | Runtime bị thu hồi; chạy lại cell one-liner |
 | `git clone` lỗi 404 | Repo code private hoặc sai tên; đặt `WINREMOTE_REPO` + PAT có quyền đọc |
