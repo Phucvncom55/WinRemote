@@ -86,12 +86,16 @@ Mở <https://colab.research.google.com>, tạo notebook mới, dán **một dò
 !WM_GITHUB_TOKEN='github_pat_xxx' bash <(curl -fsSL 'https://raw.githubusercontent.com/Phucvncom55/WinRemote/main/bootstrap.sh?v=1')
 ```
 
-Thay `github_pat_xxx` bằng **fine-grained PAT**:
+Thay `github_pat_xxx` bằng **fine-grained PAT**. Tạo nhanh tại:
 
-- **Repository access:** chỉ chọn repo `Phucvncom55/WinRemote-secrets`
-- **Permissions → Contents: Read-only**
+<https://github.com/settings/personal-access-tokens/new?name=WinRemote+Colab&description=Read+WinRemote+secrets&contents=read&expires_in=90>
 
-PAT này chỉ đọc được token bot; nếu lộ cũng không sửa được code hay repo khác.
+- **Resource owner:** `Phucvncom55`
+- **Repository access:** Only select repositories → `WinRemote-secrets`
+- **Permissions:** Contents = **Read-only** (Metadata tự động có)
+
+Sau đó dán token vào lệnh trên. PAT này chỉ đọc được token bot; nếu lộ cũng không
+sửa được code hay repo khác.
 Muốn lệnh gọn hơn, lưu PAT vào **Colab Secrets** với tên `WM_GITHUB_TOKEN`
 (biểu tượng 🔑 ở thanh bên trái, bật quyền cho notebook), sau đó dùng:
 
