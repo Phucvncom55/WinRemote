@@ -116,7 +116,13 @@ class Engine:
 
     def _backup_remote(self):
         """(remote, label) mặc định theo cấu hình backup_backend."""
-        if (self.cfg.get('backup_backend') or 'onedrive') == 'gdrive' and self.cfg.has_gdrive:
+        backend = (self.cfg.get('backup_backend') or 'onedrive')
+        if backend == 'gdrive' and self.cfg.has_gdrive:
+            return (self.cfg.get('gdrive_remote') or 'gdrive', self._gdrive_label())
+        if backend == 'onedrive' and self.cfg.has_onedrive:
+            return ('onedrive', 'OneDrive')
+        # Cloud đã chọn không còn token: dùng cloud còn lại thay vì báo lỗi.
+        if self.cfg.has_gdrive:
             return (self.cfg.get('gdrive_remote') or 'gdrive', self._gdrive_label())
         return ('onedrive', 'OneDrive')
 
@@ -671,12 +677,13 @@ class Engine:
     def show_restore_list(self, chat_id, mid=None):
         try:
             self.tg.send_chat_action(chat_id)
-            if not self.cfg.has_codespace or not self.cfg.has_onedrive:
+            if not self.cfg.has_codespace or not (self.cfg.has_onedrive or self.cfg.has_gdrive):
                 rows = []
                 if self.cfg.has_github and not self.cfg.has_codespace:
                     rows.append([('🆕 Tạo Codespace mới', 'set:csnew')])
                 rows.append([('⚙️ Cài đặt', 'set:menu')])
-                self.tg.send_message(chat_id, '⛔ Cần cấu hình Codespace + OneDrive trước (/settings).',
+                self.tg.send_message(chat_id, '⛔ Cần cấu hình Codespace + OneDrive/Google Drive '
+                                              'trước (/settings, /gdrive).',
                                      buttons=kb(rows))
                 return
             st = self.remote.state()
@@ -703,7 +710,7 @@ class Engine:
                 self.tg.send_message(chat_id, '❌ ' + esc(str(e)))
         except Exception as e:
             self.log.error('restore scan loi: %r', e, exc_info=True)
-            self.tg.send_message(chat_id, '❌ Lỗi quét OneDrive: ' + esc(str(e)[:250]))
+            self.tg.send_message(chat_id, '❌ Lỗi quét cloud: ' + esc(str(e)[:250]))
 
     def _scan_backups(self):
         remotes = []
@@ -1178,6 +1185,11 @@ class Engine:
             self._bk_opts['restart'] = (p[2] == '1')
             self.show_backup_confirm(chat_id, mid=mid)
         elif act == 't':
+            if not (self.cfg.has_gdrive and self.cfg.has_onedrive):
+                self.tg.send_message(chat_id,
+                                     'ℹ️ Chỉ có một cloud đang kết nối — không cần đổi đích.')
+                self.show_backup_confirm(chat_id, mid=mid)
+                return
             cur = self._selected_backup_remote()[0]
             self._bk_opts['remote'] = 'onedrive' if cur != 'onedrive' else 'gdrive'
             self.show_backup_confirm(chat_id, mid=mid)
@@ -2043,7 +2055,7 @@ class Engine:
             pct = -1
             if total_bytes > 0:
                 pct = min(int(round(byt / total_bytes * 100)), 100)
-            title = '📥 <b>TẢI BACKUP TỪ ONEDRIVE</b>'
+            title = f'📥 <b>TẢI BACKUP TỪ {esc(self._remote_label(remote).upper())}</b>'
             if ctx.cancelled:
                 title = '📥 <b>ĐANG HỦY TẢI…</b>' if done or proc <= 0 else '📥 <b>ĐANG DỪNG RCLONE…</b>'
             line1 = f"{fmt_bytes(byt)} / {fmt_bytes(total_bytes)}"

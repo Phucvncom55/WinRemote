@@ -929,6 +929,15 @@ def test_gdrive_flow():
         env.send('/restore')
         e2 = env.wait('KHÔI PHỤC TỪ ONEDRIVE', timeout=20)
         assert 'Google Drive' in e2['text']
+
+        # Chỉ còn Google Drive: backup tự chọn gdrive, /restore vẫn chạy được
+        env.cfg.set('onedrive_token', '')
+        env.cfg.set('backup_backend', 'onedrive')
+        assert env.eng._backup_remote()[0] == 'gdrive'
+        n = len(env.events())
+        env.send('/restore', mid=4)
+        e3 = env.wait('KHÔI PHỤC TỪ ONEDRIVE', timeout=20, since=n)
+        assert 'Google Drive' in e3['text']
     finally:
         env.cleanup()
 
