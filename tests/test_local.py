@@ -473,8 +473,8 @@ def test_settings_flows():
         assert env.cfg.get('github_token') == 'ghp_good_token'
 
         # OneDrive token — JSON hỏng
-        env.cb('set:od', mid=103)
-        env.wait('OneDrive token JSON')
+        env.cb('set:odmanual', mid=103)
+        env.wait('Gửi OneDrive token JSON')
         env.send('not a json', mid=4)
         env.wait('Không phải JSON')
 
@@ -484,8 +484,8 @@ def test_settings_flows():
             {'owner': 'phuc@example.com', 'total': 1024 ** 4, 'used': 1024 ** 3,
              'drive_type': 'personal'}, None)
         try:
-            env.cb('set:od', mid=104)
-            env.wait('OneDrive token JSON')
+            env.cb('set:odmanual', mid=104)
+            env.wait('Gửi OneDrive token JSON')
             env.send('{"access_token":"a","refresh_token":"r"}', mid=5)
             env.wait('OneDrive OK')
         finally:
@@ -537,6 +537,42 @@ def test_keepalive_log_view():
         assert env.gh.ssh_targets == ['winvm-cs']
         env.cb('ka:clear', mid=961)
         env.wait('Keepalive')
+    finally:
+        env.cleanup()
+
+
+def test_onedrive_auto_login():
+    env = Env()
+    try:
+        env.cfg.set('github_token', 'ghp_test')
+        env.cfg.set('owner_chat_id', OWNER)
+        from bot import oauth as oauthmod
+        from bot import gh as ghmod2
+        orig_start, orig_poll = oauthmod.device_start, oauthmod.device_poll
+        orig_info = ghmod2.graph_drive_info
+        oauthmod.device_start = lambda cid=None: ({
+            'device_code': 'dc', 'user_code': 'ABCD-EFGH',
+            'verification_uri': 'https://login.microsoft.com/device',
+            'expires_in': 900, 'interval': 5}, None)
+        oauthmod.device_poll = lambda *a, **kw: ({
+            'access_token': 'auto-access', 'refresh_token': 'auto-refresh',
+            'token_type': 'Bearer', 'expiry': '2026-10-24T12:00:00Z'}, None)
+        ghmod2.graph_drive_info = lambda t: (
+            {'owner': 'auto@example.com', 'total': 1024 ** 4, 'used': 0,
+             'drive_type': 'personal'}, None)
+        try:
+            env.cb('set:od', mid=110)
+            env.wait('ONEDRIVE')
+            env.cb('set:odlogin', mid=111)
+            env.wait('ABCD-EFGH', timeout=20)
+            env.wait('ĐĂNG NHẬP ONEDRIVE THÀNH CÔNG', timeout=20)
+            tok = json.loads(env.cfg.get('onedrive_token'))
+            assert tok['access_token'] == 'auto-access'
+            assert tok['refresh_token'] == 'auto-refresh'
+            assert env.cfg.get('od_owner') == 'auto@example.com'
+        finally:
+            oauthmod.device_start, oauthmod.device_poll = orig_start, orig_poll
+            ghmod2.graph_drive_info = orig_info
     finally:
         env.cleanup()
 
@@ -857,6 +893,7 @@ TESTS = [
     test_claim_status,
     test_nonowner_ignored,
     test_settings_flows,
+    test_onedrive_auto_login,
     test_repo_flow,
     test_keepalive_log_view,
     test_quota_flow,

@@ -6,7 +6,7 @@ import os
 import re
 import time
 
-from bot import ui
+from bot import oauth, ui
 from bot.tg import kb
 from bot.jobs import JobError, JobManager
 from bot.remote import CONF_PATH, WD_DIR
@@ -391,10 +391,7 @@ class Engine:
         if args.strip():
             self._apply_od_token(chat_id, args.strip(), None)
         else:
-            self.tg.send_message(
-                chat_id, '☁️ Gửi token theo cú pháp:\n<code>/onedrive {"access_token":"…",'
-                         '"refresh_token":"…"}</code>\n(tạo bằng <code>rclone authorize onedrive</code> '
-                         'trên máy có trình duyệt)')
+            self.show_onedrive(chat_id)
 
     def cmd_ssh(self, chat_id, args):
         if not args.strip():
@@ -442,6 +439,14 @@ class Engine:
     def show_settings(self, chat_id, mid=None):
         text = ui.settings_text(self.cfg)
         k = ui.settings_kb(self.cfg)
+        if mid:
+            self.tg.edit_message(chat_id, mid, text, buttons=k)
+        else:
+            self.tg.send_message(chat_id, text, buttons=k)
+
+    def show_onedrive(self, chat_id, mid=None):
+        text = ui.onedrive_text(self.cfg)
+        k = ui.onedrive_kb(self.cfg)
         if mid:
             self.tg.edit_message(chat_id, mid, text, buttons=k)
         else:
@@ -747,6 +752,8 @@ class Engine:
                 '• Gõ /cancel để bỏ qua.',
                 buttons=kb([[('❌ Bỏ qua', 'set:menu')]]))
         elif act == 'od':
+            self.show_onedrive(chat_id, mid=mid)
+        elif act == 'odmanual':
             self.pending = {'chat_id': chat_id, 'kind': 'od'}
             self.tg.edit_message(
                 chat_id, mid,
@@ -754,7 +761,11 @@ class Engine:
                 'Tạo trên máy có trình duyệt: chạy <code>rclone authorize onedrive</code> '
                 '→ copy nguyên chuỗi JSON (có access_token + refresh_token) → dán vào đây.\n'
                 '• Gõ /cancel để bỏ qua.',
-                buttons=kb([[('❌ Bỏ qua', 'set:menu')]]))
+                buttons=kb([[('⬅️ OneDrive', 'set:od')]]))
+        elif act == 'odlogin':
+            self.start_job('Đăng nhập OneDrive', chat_id, self.worker_od_login)
+        elif act == 'odcheck':
+            self.start_job('Kiểm tra OneDrive', chat_id, self.worker_od_check)
         elif act == 'odpush':
             self.start_job('Đồng bộ OneDrive (setup)', chat_id, self.worker_setup)
         elif act == 'repo':
@@ -1060,39 +1071,44 @@ class Engine:
                                       f'Nhớ xóa tin nhắn chứa token.{warn}')
         self.show_settings(chat_id)
 
-    def _apply_od_token(self, chat_id, text, mid):
+    def _apply_od_token(self, chat_id, text, mid, quiet=False):
         tok = text.strip()
         try:
             parsed = json.loads(tok)
         except ValueError as e:
-            self.tg.send_message(chat_id, f'❌ Không phải JSON: {esc(str(e))}. '
-                                          'Hãy copy nguyên chuỗi từ <code>rclone authorize onedrive</code>.')
-            return
+            if not quiet:
+                self.tg.send_message(chat_id, f'❌ Không phải JSON: {esc(str(e))}. '
+                                              'Hãy copy nguyên chuỗi từ <code>rclone authorize onedrive</code>.')
+            return False
         if not isinstance(parsed, dict) or not parsed.get('access_token'):
-            self.tg.send_message(chat_id, '❌ JSON thiếu <code>access_token</code>.')
-            return
+            if not quiet:
+                self.tg.send_message(chat_id, '❌ JSON thiếu <code>access_token</code>.')
+            return False
         import bot.gh as ghmod
         info, err = ghmod.graph_drive_info(tok)
         if err:
             self.cfg.set('onedrive_token', tok)
             self._try_delete(chat_id, mid)
-            self.tg.send_message(chat_id, '⚠️ Đã lưu token nhưng chưa xác minh được: ' + esc(err) +
-                                 '\nSẽ kiểm tra lại khi chạy /setup.')
-        else:
-            self.cfg.data['onedrive_token'] = tok
-            self.cfg.data['od_owner'] = info.get('owner') or ''
-            self.cfg.data['od_total'] = info.get('total') or 0
-            self.cfg.data['od_used'] = info.get('used') or 0
-            self.cfg.save()
-            self._try_delete(chat_id, mid)
+            if not quiet:
+                self.tg.send_message(chat_id, '⚠️ Đã lưu token nhưng chưa xác minh được: ' + esc(err) +
+                                     '\nSẽ kiểm tra lại khi chạy /setup.')
+            return True
+        self.cfg.data['onedrive_token'] = tok
+        self.cfg.data['od_owner'] = info.get('owner') or ''
+        self.cfg.data['od_total'] = info.get('total') or 0
+        self.cfg.data['od_used'] = info.get('used') or 0
+        self.cfg.save()
+        self._try_delete(chat_id, mid)
+        if not quiet:
             self.tg.send_message(
                 chat_id,
                 f"✅ OneDrive OK: <b>{esc(info.get('owner'))}</b> — "
                 f"{fmt_bytes(info.get('used') or 0)}/{fmt_bytes(info.get('total') or 0)}. "
                 'Nhớ xóa tin nhắn chứa token.')
-        kb_ = kb(
-            [[('☁️ Đồng bộ lên Codespace ngay', 'set:odpush'), ('⚙️ Cài đặt', 'set:menu')]])
-        self.tg.send_message(chat_id, 'Bấm để ghi rclone.conf vào Codespace:', buttons=kb_)
+            kb_ = kb(
+                [[('☁️ Đồng bộ lên Codespace ngay', 'set:odpush'), ('⚙️ Cài đặt', 'set:menu')]])
+            self.tg.send_message(chat_id, 'Bấm để ghi rclone.conf vào Codespace:', buttons=kb_)
+        return True
 
     def _apply_vmf(self, chat_id, field, text):
         v = text.strip()
@@ -1319,6 +1335,95 @@ class Engine:
                      [('▶️ Bật VM', 'vm:start')],
                      [('📥 Restore từ OneDrive', 'rst:scan'), ('📊 Trạng thái', 'home')]]),
                  force=True)
+
+    # ================= worker: OneDrive OAuth =================
+    def worker_od_login(self, ctx):
+        ctx.edit('🔐 <b>ONEDRIVE</b> — đang xin mã đăng nhập từ Microsoft…', force=True)
+        cid = (self.cfg.get('od_client_id') or '').strip()
+        start, err = oauth.device_start(cid or None)
+        if err:
+            raise JobError('Không bắt đầu được đăng nhập OneDrive: ' + esc(err))
+        uri = start.get('verification_uri') or start.get('verification_uri_complete') or ''
+        ctx.edit(ui.onedrive_login_text(start),
+                 buttons=ui.onedrive_login_kb(uri), force=True)
+        buttons = ui.onedrive_login_kb(uri)
+
+        def _progress(left, _code):
+            if ctx.cancelled:
+                return
+            mins = max(1, int(left / 60))
+            ctx.edit(
+                f"⏳ <b>Đang chờ bạn đăng nhập OneDrive…</b>\n\n"
+                f"• Mã: <code>{esc(start.get('user_code'))}</code>\n"
+                f"• Link: {esc(uri)}\n"
+                f"• Còn khoảng <b>{mins} phút</b> để hoàn tất.\n"
+                '• Sau khi đăng nhập + đồng ý quyền, bot tự lưu token.\n'
+                '• Gõ /cancel để hủy.',
+                buttons=buttons)
+
+        tok, err = oauth.device_poll(
+            start.get('device_code'), cid or None,
+            expires_in=start.get('expires_in'), interval=start.get('interval'),
+            cancelled=lambda: ctx.cancelled, progress=_progress)
+        if err == 'cancelled' or ctx.cancelled:
+            ctx.edit('⛔ Đã hủy đăng nhập OneDrive.', buttons=kb(
+                [[('☁️ OneDrive', 'set:od'), ('🏠 Trang chính', 'home')]]), force=True)
+            return
+        if err:
+            raise JobError('Đăng nhập OneDrive thất bại: ' + esc(err))
+        ok = self._apply_od_token(ctx.chat_id, json.dumps(tok), None, quiet=True)
+        if not ok:
+            raise JobError('Nhận được token nhưng không lưu được (JSON lỗi).')
+        owner = self.cfg.get('od_owner') or 'tài khoản Microsoft'
+        ctx.edit(
+            '✅ <b>ĐĂNG NHẬP ONEDRIVE THÀNH CÔNG</b>\n'
+            f"• Tài khoản: <b>{esc(owner)}</b>\n"
+            f"• Dung lượng: {fmt_bytes(self.cfg.get('od_used') or 0)}/"
+            f"{fmt_bytes(self.cfg.get('od_total') or 0)}\n"
+            '• Token có refresh_token nên rclone tự gia hạn.\n\n'
+            'Bước tiếp: ghi cấu hình rclone lên Codespace (/setup hoặc nút bên dưới).',
+            buttons=kb([
+                [('📤 Đồng bộ lên Codespace', 'set:odpush')],
+                [('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')]]),
+            force=True)
+
+    def worker_od_check(self, ctx):
+        ctx.edit('🔄 <b>ONEDRIVE</b> — đang kiểm tra token…', force=True)
+        if not self.cfg.has_onedrive:
+            raise JobError('Chưa có token OneDrive — bấm "Đăng nhập OneDrive tự động".')
+        import bot.gh as ghmod
+        cur = self.cfg.get('onedrive_token') or ''
+        info, err = ghmod.graph_drive_info(cur)
+        if err:
+            try:
+                parsed = json.loads(cur)
+            except ValueError:
+                parsed = {}
+            if parsed.get('_client_id'):
+                newtok, rerr = oauth.refresh_onedrive(cur, self.cfg.get('od_client_id') or None)
+                if newtok:
+                    cur = json.dumps(newtok)
+                    self.cfg.set('onedrive_token', cur)
+                    info, err = ghmod.graph_drive_info(cur)
+                elif rerr:
+                    err = rerr
+        if not info:
+            ctx.edit('⚠️ Chưa xác minh được token OneDrive:\n<code>' + esc(str(err)[:400]) + '</code>\n\n'
+                     'Bấm "Đăng nhập OneDrive tự động" để lấy token mới (có refresh_token).',
+                     buttons=kb([[('🔐 Đăng nhập lại', 'set:odlogin'),
+                                  ('☁️ OneDrive', 'set:od')]]), force=True)
+            return
+        self.cfg.data['od_owner'] = info.get('owner') or ''
+        self.cfg.data['od_total'] = info.get('total') or 0
+        self.cfg.data['od_used'] = info.get('used') or 0
+        self.cfg.save()
+        ctx.edit('✅ <b>ONEDRIVE HỢP LỆ</b>\n'
+                 f"• Tài khoản: <b>{esc(info.get('owner'))}</b>\n"
+                 f"• Dung lượng: {fmt_bytes(info.get('used') or 0)}/"
+                 f"{fmt_bytes(info.get('total') or 0)}\n"
+                 f"• Loại: {esc(info.get('drive_type') or '?')}",
+                 buttons=kb([[('📤 Đồng bộ lên Codespace', 'set:odpush'),
+                              ('⚙️ Cài đặt', 'set:menu')]]), force=True)
 
     # ================= helper: repo cho Codespace / Actions =================
     def _actions_repo(self, ctx, create=True):

@@ -53,8 +53,13 @@ if not drive_id:
     say('NO_DRIVE_ID'); sys.exit(3)
 
 lines = ['[onedrive]', 'type = onedrive',
-         'token = ' + json.dumps(token_obj),
-         'drive_id = ' + drive_id, 'drive_type = ' + drive_type, '']
+         'token = ' + json.dumps(token_obj)]
+# Token đăng nhập tự động (device flow) thuộc app Microsoft Office — phải ghi
+# đúng client_id để rclone dùng cùng app khi refresh (refresh_token gắn với app).
+tok_client = str(token_obj.get('_client_id') or '')
+if tok_client:
+    lines.append('client_id = ' + tok_client)
+lines += ['drive_id = ' + drive_id, 'drive_type = ' + drive_type, '']
 with open(CONF, 'w', encoding='utf-8') as f:
     f.write('\n'.join(lines))
 os.chmod(CONF, 0o600)

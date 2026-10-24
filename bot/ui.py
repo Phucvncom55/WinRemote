@@ -96,7 +96,7 @@ def h_start(cfg, claimed=False):
 
 def h_help():
     return ('📖 <b>HƯỚNG DẪN NHANH</b>\n'
-            '1️⃣ /settings — nhập GitHub token (quyền codespace) + OneDrive token + chọn Codespace.\n'
+            '1️⃣ /settings — nhập GitHub token (quyền codespace) + đăng nhập OneDrive tự động + chọn Codespace.\n'
             '2️⃣ /setup — mount ổ dữ liệu + cài rclone + nối OneDrive trên Codespace.\n'
             '3️⃣ /restore — tải backup từ OneDrive về (hoặc bỏ qua nếu đã có data.img).\n'
             '4️⃣ /vm — bật/dừng VM (Web UI 8006 + RDP 3389 tự mở khi máy chạy).\n'
@@ -130,7 +130,7 @@ def account_text(cfg, ka_snap):
     ka_state = ka_snap.get('state') if ka_snap else 'off'
     lines.append(f"🔄 Keepalive: <b>{esc(ka_state)}</b> (mỗi {cfg.get('keepalive_interval')}s)")
     return '\n'.join(lines), kb([
-        [('🔑 GitHub token', 'set:gh'), ('☁️ OneDrive token', 'set:od')],
+        [('🔑 GitHub token', 'set:gh'), ('☁️ OneDrive', 'set:od')],
         [('🏠 Trang chính', 'home')],
     ])
 
@@ -227,7 +227,7 @@ def settings_kb(cfg):
     vm = cfg.vm()
     ka = 'BẬT' if cfg.get('keepalive_enabled') else 'TẮT'
     return kb([
-        [('🔑 GitHub token', 'set:gh'), ('☁️ OneDrive token', 'set:od')],
+        [('🔑 GitHub token', 'set:gh'), ('☁️ OneDrive', 'set:od')],
         [(f"🧩 Codespace: {shorten(cfg.get('codespace') or 'chọn…', 18)}", 'set:cs')],
         [(f"📦 Repo: {shorten(cfg.get('cs_repo') or 'chưa đặt', 24)}", 'set:repo')],
         [('🆕 Tạo Codespace mới (4c/16G/32G)', 'set:csnew')],
@@ -287,6 +287,71 @@ def repo_list_kb(repos):
         name = str(row.get('nameWithOwner') or row.get('name') or '?')
         rows.append([(f"{i + 1}. {shorten(name, 34)}", f'set:repop:{i}')])
     rows.append([('⬅️ Repo', 'set:repo'), ('🏠 Trang chính', 'home')])
+    return kb(rows)
+
+
+# ============================ OneDrive ============================
+
+def onedrive_text(cfg):
+    lines = ['☁️ <b>ONEDRIVE</b>', '']
+    if cfg.has_onedrive:
+        lines.append('• Token: ✅ đã lưu')
+        if cfg.get('od_owner'):
+            lines.append(f"• Tài khoản: <b>{esc(cfg.get('od_owner'))}</b> — "
+                         f"{fmt_bytes(cfg.get('od_used') or 0)}/{fmt_bytes(cfg.get('od_total') or 0)}")
+    else:
+        lines.append('• Token: ⛔ chưa có')
+    lines.append('')
+    lines.append('🔐 <b>Đăng nhập tự động</b> (khuyến nghị): bot hiện link + mã, bạn mở trên '
+                 'điện thoại/máy tính, đăng nhập Microsoft rồi đồng ý quyền OneDrive. '
+                 'Bot tự nhận token, không cần cài rclone trên máy bạn.')
+    lines.append('')
+    lines.append('📋 <b>Dán token JSON</b>: dành cho trường hợp tài khoản bị tổ chức chặn '
+                 'đăng nhập thiết bị — tạo bằng <code>rclone authorize onedrive</code>.')
+    return '\n'.join(lines)
+
+
+def onedrive_kb(cfg):
+    rows = [
+        [('🔐 Đăng nhập OneDrive tự động', 'set:odlogin')],
+        [('📋 Dán token JSON (nâng cao)', 'set:odmanual')],
+    ]
+    if cfg.has_onedrive:
+        rows.append([('🔄 Kiểm tra / làm mới token', 'set:odcheck')])
+        rows.append([('📤 Đồng bộ lên Codespace', 'set:odpush')])
+    rows.append([('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')])
+    return kb(rows)
+
+
+def onedrive_login_text(start, note=''):
+    start = start or {}
+    uri = start.get('verification_uri') or start.get('verification_uri_complete') or \
+        'https://login.microsoftonline.com/device'
+    code = start.get('user_code') or ''
+    mins = int((start.get('expires_in') or 900) / 60)
+    lines = ['🔐 <b>ĐĂNG NHẬP ONEDRIVE TỰ ĐỘNG</b>', '']
+    lines.append('1️⃣ Mở link sau trên điện thoại hoặc máy tính:')
+    lines.append(f'👉 {esc(uri)}')
+    lines.append('')
+    lines.append('2️⃣ Nhập mã:')
+    lines.append(f'<code>{esc(code)}</code>')
+    lines.append('')
+    lines.append('3️⃣ Đăng nhập tài khoản Microsoft và bấm <b>Đồng ý / Accept</b> để cấp quyền '
+                 'OneDrive (Files.ReadWrite.All).')
+    lines.append('')
+    lines.append(f'⏳ Bot đang chờ tối đa <b>{mins} phút</b> — bạn không cần làm gì thêm. '
+                 'Gõ /cancel để hủy.')
+    if note:
+        lines.append('')
+        lines.append(note)
+    return '\n'.join(lines)
+
+
+def onedrive_login_kb(uri):
+    rows = []
+    if uri:
+        rows.append([('🌐 Mở trang đăng nhập Microsoft', uri)])
+    rows.append([('⛔ Hủy đăng nhập', 'job:cancel')])
     return kb(rows)
 
 

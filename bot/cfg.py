@@ -11,6 +11,7 @@ DEFAULTS = {
     'github_token': '',
     'github_login': '',
     'onedrive_token': '',
+    'od_client_id': '',
     'od_owner': '',
     'od_total': 0,
     'od_used': 0,
