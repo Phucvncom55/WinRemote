@@ -191,6 +191,28 @@ class FakeGh:
         self.cs_list.append({'name': 'winvm-cs-new', 'state': 'Available', 'repository': repo})
         return GhResult(0, 'winvm-cs-new\n', '')
 
+    def codespace_detail(self, name):
+        return {
+            'name': name, 'state': 'Available',
+            'machine': {'name': 'standardLinux32gb',
+                        'display_name': '4-core • 16GB RAM • 32GB storage',
+                        'cpus': 4, 'memory_in_bytes': 16 * 1024 ** 3,
+                        'storage_in_bytes': 32 * 1024 ** 3},
+        }
+
+    def billing_usage_summary(self, login, year=None, month=None):
+        if getattr(self, 'billing_denied', False):
+            return {'_error': 'HTTP 403: token needs user/manage_billing scope'}
+        return {'timePeriod': {'year': 2026, 'month': 10}, 'user': login,
+                'usageItems': [
+                    {'product': 'Codespaces', 'sku': 'codespaces_compute',
+                     'unitType': 'minutes', 'grossQuantity': 370.2,
+                     'netQuantity': 370.2},
+                    {'product': 'Codespaces', 'sku': 'codespaces_storage',
+                     'unitType': 'GB-month', 'grossQuantity': 0.15,
+                     'netQuantity': 0.15},
+                ]}
+
     # ---------- Actions ----------
     def repo_file_sha(self, repo, path):
         return ''
@@ -475,6 +497,28 @@ def test_settings_flows():
         env.cb('set:csp:0', mid=105)
         env.wait('Đã chọn Codespace')
         assert env.cfg.get('codespace') == 'winvm-cs'
+    finally:
+        env.cleanup()
+
+
+def test_quota_flow():
+    env = Env()
+    try:
+        env.configure()
+        env.send('/quota')
+        e = env.wait('HẠN MỨC CODESPACE', timeout=20)
+        assert '6.17 / 120' in e['text']
+        assert '28 giờ' in e['text']
+        assert '0.15 / 15' in e['text']
+        assert 'vCPU' in e['text']
+        # billing bị chặn: hiện cảnh báo + cho phép nhập tay
+        env.gh.billing_denied = True
+        env.cfg.set('quota_cache_sec', 30)
+        env.send('/quota set 30 1.5')
+        env.wait('Đã lưu số liệu quota nhập tay')
+        e2 = env.wait('30.00 / 120', timeout=20)
+        assert '22 giờ' in e2['text'] or '22 giờ 30 phút' in e2['text']
+        assert '1.50 / 15' in e2['text']
     finally:
         env.cleanup()
 
@@ -808,6 +852,7 @@ TESTS = [
     test_settings_flows,
     test_repo_flow,
     test_keepalive_log_view,
+    test_quota_flow,
     test_backup_flow,
     test_backup_cancel,
     test_restore_flow,

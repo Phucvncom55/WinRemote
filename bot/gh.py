@@ -282,14 +282,25 @@ class GhCli:
         return self.api_json('user/codespaces/' + str(name))
 
     def billing_usage_summary(self, login, year=None, month=None):
-        """Báo cáo usage (enhanced billing) — None nếu token không đủ quyền."""
+        """Báo cáo usage (enhanced billing) — trả {'_error': ...} nếu token thiếu quyền."""
         import datetime
         now = datetime.datetime.now(datetime.timezone.utc)
         year = int(year or now.year)
         month = int(month or now.month)
-        return self.api_json(
-            f'users/{login}/settings/billing/usage/summary',
-            ['-X', 'GET', '-f', f'year={year}', '-f', f'month={month}'])
+        r = self.run(['api', '-X', 'GET',
+                      f'users/{login}/settings/billing/usage/summary',
+                      '-f', f'year={year}', '-f', f'month={month}'], timeout=90)
+        if not r.ok:
+            msg = ((r.err or '') + ' ' + (r.out or '')).strip()
+            return {'_error': msg[-400:] or 'billing API lỗi'}
+        txt = (r.out or '').strip()
+        try:
+            data = json.loads(txt)
+        except ValueError:
+            return {'_error': 'billing API trả dữ liệu không phải JSON'}
+        if not isinstance(data, dict):
+            return {'_error': 'billing API trả dữ liệu rỗng'}
+        return data
 
     # ---------- GitHub Actions ----------
     def repo_file_sha(self, repo, path):

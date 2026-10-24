@@ -20,6 +20,11 @@ DEFAULTS = {
     'tailscale_key': '',
     'keepalive_enabled': True,
     'keepalive_interval': 60,
+    'quota_core_hours': 120,
+    'quota_storage_gb_month': 15,
+    'quota_used_core_hours': None,
+    'quota_used_storage_gb_month': None,
+    'quota_cache_sec': 300,
     'vm': {
         'cores': 4,
         'ram_gb': 12,

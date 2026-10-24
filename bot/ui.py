@@ -77,8 +77,8 @@ def h_start(cfg, claimed=False):
     if claimed:
         lines.append('👑 Bạn là <b>chủ sở hữu</b> bot này.')
     lines.append('')
-    lines.append('Lệnh chính: /status • /backup • /restore • /setup')
-    lines.append('Khác: /vm • /actions • /repo • /ssh • /cleanup • /settings')
+    lines.append('Lệnh chính: /status • /backup • /restore • /setup • /quota')
+    lines.append('Khác: /vm • /actions • /repo • /kalog • /ssh • /cleanup • /settings')
     if not (cfg.has_github and cfg.has_onedrive and cfg.has_codespace):
         missing = []
         if not cfg.has_github:
@@ -234,7 +234,8 @@ def settings_kb(cfg):
         [(f"🔄 Keepalive: {ka}", 'set:ka'),
          (f"⏱ {cfg.get('keepalive_interval')}s", 'set:kaint')],
         [('📜 Log keepalive', 'ka:log'), ('🧪 Test keepalive', 'ka:test')],
-        [(f"🖥 VM: {vm['cores']}c/{vm['ram_gb']}G/{vm['disk_gb']}G", 'set:vmmenu')],
+        [(f"🖥 VM: {vm['cores']}c/{vm['ram_gb']}G/{vm['disk_gb']}G", 'set:vmmenu'),
+         ('📊 Quota', 'q:show')],
         [('👤 Tài khoản', 'set:acc'), ('🖥 VM Actions', 'act:menu'), ('🏠 Trang chính', 'home')],
     ])
 
@@ -380,6 +381,117 @@ def keepalive_test_kb():
         [('📜 Log keepalive', 'ka:log'), ('🧪 Test lại', 'ka:test')],
         [('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')],
     ])
+
+
+# ============================ quota ============================
+
+def _hm(hours):
+    hours = max(0.0, float(hours or 0))
+    h = int(hours)
+    m = int(round((hours - h) * 60))
+    if m >= 60:
+        h += 1
+        m = 0
+    return f'{h} giờ {m:02d} phút'
+
+
+def _days(days):
+    days = max(0.0, float(days or 0))
+    d = int(days)
+    rem = (days - d) * 24
+    h = int(rem)
+    m = int(round((rem - h) * 60))
+    if m >= 60:
+        h += 1
+        m = 0
+    if h >= 24:
+        d += 1
+        h = 0
+    return f'{d} ngày {h} giờ {m:02d} phút'
+
+
+def quota_text(q):
+    q = q or {}
+    lines = ['📊 <b>HẠN MỨC CODESPACE CÒN LẠI</b>', '']
+    if q.get('error') and not q.get('login'):
+        lines.append('⛔ ' + esc(str(q.get('error'))[:300]))
+        return '\n'.join(lines)
+    login = q.get('login') or '(chưa rõ)'
+    lines.append(f"👤 Tài khoản: <b>{esc(login)}</b> — gói <b>{esc(q.get('plan') or 'Free')}</b>")
+    cores = q.get('cores') or 0
+    ram = q.get('ram_gb') or 0
+    disk = q.get('disk_gb') or 0
+    if cores or disk:
+        lines.append(f"⚙️ Máy: <b>{cores} vCPU</b> • {ram} GB RAM • ổ đĩa {disk} GB"
+                     + (f" • <code>{esc(q.get('machine'))}</code>" if q.get('machine') else ''))
+    lines.append('')
+
+    inc_core = float(q.get('included_core_hours') or 0)
+    used_core = q.get('used_core_hours')
+    run_left = q.get('run_hours_left')
+    lines.append('🖥 <b>Thời gian CHẠY máy</b> (tính theo số vCPU):')
+    if used_core is None:
+        lines.append('• Chưa lấy được số đã dùng từ GitHub.')
+    else:
+        extra = f' (≈ {_hm(float(used_core) / cores)})' if cores else ''
+        lines.append(f'• Đã dùng <b>{float(used_core):.2f} / {inc_core:.0f} giờ nhân lõi</b>{extra}')
+    if run_left is not None:
+        lines.append(f'• Còn lại: <b>{_hm(run_left)}</b>')
+    lines.append('')
+
+    inc_st = float(q.get('included_storage_gb_month') or 0)
+    used_st = q.get('used_storage_gb_month')
+    lines.append('💾 <b>Thời gian TREO máy</b> (theo dung lượng ổ đĩa, kể cả khi VM dừng):')
+    if used_st is None:
+        lines.append('• Chưa lấy được dung lượng lưu trữ đã dùng từ GitHub.')
+    else:
+        lines.append(f'• Lưu trữ đã dùng <b>{float(used_st):.2f} / {inc_st:.0f} GB-tháng</b>')
+    if q.get('storage_days_left') is not None and disk:
+        lines.append(f'• Với ổ đĩa {disk} GB: còn khoảng <b>{_days(q.get("storage_days_left"))}</b>')
+    lines.append('')
+
+    total = q.get('run_hours_left')
+    if total is not None:
+        lines.append('⏱️ <b>TỔNG THỜI GIAN SỬ DỤNG THỰC TẾ CÒN LẠI:</b>')
+        lines.append(f'👉 <b>{_hm(total)}</b>')
+        lines.append('　└ giới hạn bởi thời gian chạy máy (vCPU)')
+        lines.append('')
+    if q.get('updated'):
+        lines.append(f"🕒 Cập nhật: {esc(q.get('updated'))}")
+    if q.get('source') == 'api':
+        lines.append('ℹ️ Số liệu GitHub cập nhật định kỳ mỗi giờ (có thể chậm hơn một chút).')
+    else:
+        lines.append('ℹ️ Chưa đọc được billing API nên phần "đã dùng" có thể thiếu. '
+                     'Hạn mức Free mặc định: 120 giờ nhân lõi + 15 GB-tháng.')
+        if q.get('error'):
+            lines.append(f"⚠️ {esc(str(q.get('error'))[:250])}")
+        lines.append('💡 Token GitHub cần scope <code>user</code> (hoặc quyền đọc billing) '
+                     'để lấy số liệu chính xác.')
+    return '\n'.join(lines)
+
+
+def quota_kb(q=None):
+    q = q or {}
+    rows = [[('🔄 Làm mới', 'q:show'), ('📖 Cách tính', 'q:help')]]
+    rows.append([('🌐 Trang billing GitHub', 'https://github.com/settings/billing')])
+    rows.append([('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')])
+    return kb(rows)
+
+
+def quota_help_text(cfg):
+    return ('📖 <b>CÁCH TÍNH HẠN MỨC CODESPACE</b>\n\n'
+            '• GitHub Free cho <b>120 giờ nhân lõi/tháng</b> (core-hours). '
+            'Máy 4 vCPU dùng 1 giờ thực tế = 4 giờ nhân lõi, nên chạy liên tục được ~30 giờ/tháng.\n'
+            '• Lưu trữ Free: <b>15 GB-tháng</b>. Ổ 32 GB treo cả tháng sẽ tốn 32 GB-tháng, '
+            'nên chỉ giữ được ~14 ngày nếu dùng hết 15 GB-tháng.\n'
+            '• Bot đọc số đã dùng từ GitHub Billing API (usage summary) và quy đổi theo '
+            'số vCPU/ổ đĩa của Codespace đang chọn.\n'
+            '• Có thể chỉnh hạn mức trong <code>bot-config.json</code>: '
+            f"<code>quota_core_hours={cfg.get('quota_core_hours')}</code>, "
+            f"<code>quota_storage_gb_month={cfg.get('quota_storage_gb_month')}</code>.\n\n"
+            '⚠️ Đây là ước tính theo hạn mức Free; nếu tài khoản có gói trả phí, '
+            'hạn mức thực tế có thể khác.')
+
 
 
 

@@ -10,7 +10,7 @@ from bot import ui
 from bot.tg import kb
 from bot.jobs import JobError, JobManager
 from bot.remote import CONF_PATH, WD_DIR
-from bot.util import esc, fmt_bytes, fmt_elapsed, fmt_age
+from bot.util import esc, fmt_bytes, fmt_elapsed, fmt_age, vn_time
 
 PROBE_BACKUP = (
     'echo MARK_P; cat /tmp/vm_backup_progress 2>/dev/null || true; '
@@ -67,6 +67,7 @@ class Engine:
         self._repo_choices = []
         self._probe_cache = (0.0, None)
         self._act_cache = (0.0, None)
+        self._quota_cache = (0.0, None)
         self._bk_opts = {'keep_local': False, 'restart': True}
         self._notify_gate = {}
 
@@ -174,6 +175,174 @@ class Engine:
 
     def cmd_status(self, chat_id, args):
         self.show_status(chat_id)
+
+    def cmd_quota(self, chat_id, args):
+        a = (args or '').strip().lower()
+        if a.startswith('set'):
+            if self._set_quota_manual(chat_id, args.strip()[3:].strip()):
+                self.show_quota(chat_id, force=True)
+            return
+        if a in ('reset', 'clear', 'xoa', 'xóa'):
+            self.cfg.data['quota_used_core_hours'] = None
+            self.cfg.data['quota_used_storage_gb_month'] = None
+            self.cfg.save()
+            self._quota_cache = (0.0, None)
+            self.tg.send_message(chat_id, '✅ Đã xóa số liệu quota nhập tay.')
+        self.show_quota(chat_id, force=True)
+
+    def _set_quota_manual(self, chat_id, text):
+        parts = [x for x in text.replace(',', '.').split() if x]
+        if not parts:
+            self.tg.send_message(chat_id, '📊 Cú pháp: <code>/quota set &lt;giờ nhân lõi&gt; '
+                                          '[GB-tháng]</code>\n'
+                                          'Ví dụ: <code>/quota set 6.17 0.15</code>')
+            return False
+        try:
+            core = float(parts[0])
+            st = float(parts[1]) if len(parts) > 1 else None
+        except ValueError:
+            self.tg.send_message(chat_id, '❌ Không phải số. Ví dụ: <code>/quota set 6.17 0.15</code>')
+            return False
+        if core < 0 or (st is not None and st < 0):
+            self.tg.send_message(chat_id, '❌ Giá trị phải >= 0.')
+            return False
+        self.cfg.data['quota_used_core_hours'] = core
+        self.cfg.data['quota_used_storage_gb_month'] = st
+        self.cfg.save()
+        self._quota_cache = (0.0, None)
+        self.tg.send_message(chat_id, '✅ Đã lưu số liệu quota nhập tay '
+                                      f'({core:.2f} giờ nhân lõi' +
+                                      (f', {st:.2f} GB-tháng).' if st is not None else ').'))
+        return True
+
+    def show_quota(self, chat_id, mid=None, force=False):
+        try:
+            self.tg.send_chat_action(chat_id)
+            q = self.get_quota(force=force)
+            text = ui.quota_text(q)
+            k = ui.quota_kb(q)
+            if mid:
+                self.tg.edit_message(chat_id, mid, text, buttons=k)
+            else:
+                self.tg.send_message(chat_id, text, buttons=k)
+        except Exception as e:  # noqa
+            self.log.error('quota loi: %r', e, exc_info=True)
+            self.tg.send_message(chat_id, '❌ Không tính được quota: ' + esc(str(e)[:250]))
+
+    @staticmethod
+    def _parse_codespace_usage(summary):
+        """Tách giờ nhân lõi + GB-tháng đã dùng từ billing usage summary."""
+        core = None
+        storage = None
+        for it in (summary or {}).get('usageItems') or []:
+            if not isinstance(it, dict):
+                continue
+            prod = str(it.get('product') or '').lower()
+            sku = str(it.get('sku') or '').lower()
+            unit = str(it.get('unitType') or '').lower()
+            if 'codespace' not in prod and 'codespace' not in sku:
+                continue
+            try:
+                qty = float(it.get('grossQuantity') or 0)
+            except (TypeError, ValueError):
+                qty = 0.0
+            if qty <= 0:
+                try:
+                    qty = float(it.get('netQuantity') or 0)
+                except (TypeError, ValueError):
+                    qty = 0.0
+            is_storage = ('storage' in sku or 'storage' in unit
+                          or 'gb-month' in unit or 'gb month' in unit
+                          or 'gb_month' in unit)
+            if is_storage:
+                if 'hour' in unit:
+                    qty = qty / 730.0
+                storage = (storage or 0.0) + qty
+                continue
+            is_compute = ('compute' in sku or 'core' in unit or 'minute' in unit
+                          or unit in ('hour', 'hours', 'minute', 'minutes'))
+            if is_compute:
+                if 'minute' in unit:
+                    qty = qty / 60.0
+                elif 'second' in unit:
+                    qty = qty / 3600.0
+                core = (core or 0.0) + qty
+        return core, storage
+
+    def get_quota(self, force=False):
+        now = time.time()
+        ttl = max(30, self._int_safe(self.cfg.get('quota_cache_sec'), 300))
+        if not force and self._quota_cache[1] and now - self._quota_cache[0] < ttl:
+            return self._quota_cache[1]
+        login = self.cfg.get('github_login') or ''
+        if not login and self.cfg.has_github:
+            login = self.gh.api_user()
+            if login:
+                self.cfg.set('github_login', login)
+        q = {
+            'login': login,
+            'plan': 'Free',
+            'cores': 0, 'ram_gb': 0, 'disk_gb': 0, 'machine': '',
+            'included_core_hours': float(self.cfg.get('quota_core_hours') or 120),
+            'included_storage_gb_month': float(self.cfg.get('quota_storage_gb_month') or 15),
+            'used_core_hours': None, 'used_storage_gb_month': None,
+            'run_hours_left': None, 'storage_days_left': None,
+            'source': 'none', 'error': '', 'updated': vn_time(fmt='%H:%M %d/%m/%Y'),
+        }
+        if not self.cfg.has_github:
+            q['error'] = 'Chưa có GitHub token — mở /settings.'
+            return q
+        cs = self.cfg.get('codespace') or ''
+        detail = None
+        if cs:
+            try:
+                detail = self.gh.codespace_detail(cs) or {}
+            except Exception as e:  # noqa
+                detail = {'_error': str(e)}
+        machine = (detail or {}).get('machine') or {}
+        cores = self._int_safe(machine.get('cpus'))
+        ram = self._int_safe(machine.get('memory_in_bytes')) // (1024 ** 3)
+        disk = self._int_safe(machine.get('storage_in_bytes')) // (1024 ** 3)
+        if not cores:
+            cores = self._int_safe(self.cfg.vm().get('cores'), 4)
+        if not ram:
+            ram = self._int_safe(self.cfg.vm().get('ram_gb'), 16)
+        if not disk:
+            disk = self._int_safe(self.cfg.vm().get('disk_gb'), 32)
+        q.update({'cores': cores, 'ram_gb': ram, 'disk_gb': disk,
+                  'machine': str(machine.get('name') or machine.get('display_name') or cs)})
+
+        summary = self.gh.billing_usage_summary(login) if login else {}
+        if summary and not summary.get('_error'):
+            q['source'] = 'api'
+            used_core, used_st = self._parse_codespace_usage(summary)
+            if used_core is not None:
+                q['used_core_hours'] = used_core
+            if used_st is not None:
+                q['used_storage_gb_month'] = used_st
+        else:
+            q['error'] = (summary or {}).get('_error', '') or 'Không gọi được billing API.'
+            # dùng số nhập tay nếu có
+            mc = self.cfg.get('quota_used_core_hours')
+            ms = self.cfg.get('quota_used_storage_gb_month')
+            if mc is not None:
+                q['used_core_hours'] = float(mc)
+                q['source'] = 'manual'
+            if ms is not None:
+                q['used_storage_gb_month'] = float(ms)
+                q['source'] = 'manual'
+
+        if q['used_core_hours'] is None and q['source'] == 'none':
+            # chưa có API lẫn số nhập tay: không bịa số đã dùng
+            q['run_hours_left'] = None
+        elif q['used_core_hours'] is not None:
+            left = max(0.0, q['included_core_hours'] - q['used_core_hours'])
+            q['run_hours_left'] = left / cores if cores else None
+        if q['used_storage_gb_month'] is not None and disk:
+            left_st = max(0.0, q['included_storage_gb_month'] - q['used_storage_gb_month'])
+            q['storage_days_left'] = left_st / disk * 30.0
+        self._quota_cache = (now, q)
+        return q
 
     def cmd_settings(self, chat_id, args):
         self.show_settings(chat_id)
@@ -535,6 +704,13 @@ class Engine:
                     self.show_cleanup(chat_id, mid=mid)
             elif head == 'ka':
                 self._cb_keepalive(chat_id, mid, p)
+            elif head == 'q':
+                if len(p) > 1 and p[1] == 'help':
+                    self.tg.edit_message(chat_id, mid, ui.quota_help_text(self.cfg),
+                                         buttons=kb(
+                                             [[('⬅️ Quota', 'q:show'), ('🏠 Trang chính', 'home')]]))
+                else:
+                    self.show_quota(chat_id, mid=mid, force=True)
             elif head == 'job':
                 msg2 = self.jobs.cancel(chat_id)
                 self.tg.answer_callback(qid, msg2[:190])
