@@ -888,6 +888,36 @@ class Engine:
         act = p[1] if len(p) > 1 else 'log'
         if act in ('log', 'r'):
             self.show_keepalive(chat_id, mid=mid)
+        elif act == 'restart':
+            msg = '♻️ Đã yêu cầu mở lại phiên SSH keepalive.'
+            if self.ka and hasattr(self.ka, 'restart'):
+                try:
+                    self.ka.restart()
+                except Exception as e:  # noqa
+                    msg = '⚠️ Không mở lại được: ' + esc(str(e)[:150])
+            else:
+                msg = '⚠️ Keepalive chưa chạy trong tiến trình bot.'
+            snap = self.ka.snapshot() if self.ka else {}
+            text = ui.keepalive_text(self.cfg, snap)
+            if msg:
+                text = msg + '\n\n' + text
+            self.tg.edit_message(chat_id, mid, text, buttons=ui.keepalive_kb(self.cfg))
+        elif act == 'file':
+            data = ''
+            if self.ka and hasattr(self.ka, 'read_logfile'):
+                try:
+                    data = self.ka.read_logfile() or ''
+                except Exception:
+                    data = ''
+            snap = self.ka.snapshot() if self.ka else {}
+            if not data:
+                snap_lines = '\n'.join([str(x) for x in (snap.get('lines') or [])])
+                data = snap_lines or 'Chưa có log keepalive.'
+            self.tg.send_document(
+                chat_id, 'keepalive.log', data.encode('utf-8', 'replace'),
+                caption=(f"📄 Log keepalive — đích: {snap.get('target') or '(chưa có)'}"
+                         f" • nhịp tim: {snap.get('beats') or 0}"))
+            self.show_keepalive(chat_id)
         elif act == 'test':
             self.start_job('Test keepalive', chat_id, self.worker_ka_test)
         elif act == 'clear':
@@ -920,16 +950,29 @@ class Engine:
         cmd = ('echo "KA_TARGET=$(hostname)"; '
                'echo "KA_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; '
                'echo "KA_WORKSPACE=$(pwd)"; '
+               'echo "KA_UPTIME=$(cut -d. -f1 /proc/uptime 2>/dev/null)"; '
                'echo "KA_CS_NAME=' + cs.replace('"', '') + '"')
         r = self.gh.ssh(cs, cmd, timeout=120)
         out = ((r.out or '') + '\n' + (r.err or '')).strip()
         ok = r.ok and 'KA_TARGET=' in out
+        # Nếu phiên keepalive đang trỏ sai Codespace (hoặc chưa chạy) thì mở lại ngay.
+        restarted = False
+        if ok and self.ka and hasattr(self.ka, 'restart'):
+            target = (snap.get('target') or '') if isinstance(snap, dict) else ''
+            if self.cfg.get('keepalive_enabled') and target != cs:
+                try:
+                    self.ka.restart()
+                    restarted = True
+                except Exception:
+                    pass
         snap2 = self.ka.snapshot() if self.ka else snap
         res = {'ok': ok, 'rc': r.rc, 'out': out[-1500:],
                'error': '' if ok else ('SSH không trả về dữ liệu — kiểm tra log keepalive / '
                                        'token / trạng thái Codespace.')}
-        ctx.edit(ui.keepalive_test_text(self.cfg, snap2, res),
-                 buttons=ui.keepalive_test_kb(), force=True)
+        text = ui.keepalive_test_text(self.cfg, snap2, res)
+        if restarted:
+            text += '\n\n♻️ Đã mở lại phiên keepalive để trỏ đúng Codespace đang chọn.'
+        ctx.edit(text, buttons=ui.keepalive_test_kb(), force=True)
 
     def _cb_actions(self, chat_id, mid, p):
         act = p[1] if len(p) > 1 else 'menu'

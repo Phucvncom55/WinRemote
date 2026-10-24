@@ -176,6 +176,10 @@ def status_text(cfg, cs_state, probe, ka_snap, job_info, act=None):
         tm = _clock_hms(ka_snap.get('last_line'))
         extra = f" • cập nhật {tm}" if tm else ''
         lines.append(f"🔄 Keepalive: <b>{esc(kst)}</b>{extra}")
+        kt = ka_snap.get('target') or ''
+        if kt and cfg.get('codespace') and kt != cfg.get('codespace'):
+            lines.append(f"　└ ⚠️ đang trỏ <code>{esc(kt)}</code> — bấm 📜 KA log → "
+                         'Mở lại phiên SSH')
         if ka_snap.get('last_error'):
             lines.append(f"　└ ⚠️ {esc(str(ka_snap.get('last_error'))[:130])}")
     if job_info:
@@ -381,13 +385,25 @@ def keepalive_text(cfg, snap):
     lines.append(f"• Codespace đích: <code>{esc(target)}</code>")
     cs = cfg.get('codespace') or ''
     if cs and target and cs != target:
-        lines.append('　└ ⚠️ KHÁC codespace đang chọn — bật/tắt keepalive để mở phiên mới.')
+        lines.append('　└ ⚠️ KHÁC codespace đang chọn — bấm <b>Mở lại phiên</b> để trỏ đúng.')
+    host = snap.get('host') or ''
+    if host:
+        match = '✅' if (cs and (cs in host or host in cs)) else 'ℹ️'
+        lines.append(f"• Hostname máy đích: <code>{esc(host)}</code> {match}")
+        if cs and not (cs in host or host in cs):
+            lines.append('　└ ℹ️ Hostname Codespace thường có thêm hậu tố — kiểm tra dòng '
+                         '<code>KA_HOST</code> trong log bên dưới.')
     pid = snap.get('pid') or 0
     lines.append(f"• Tiến trình SSH: {'pid ' + str(pid) if pid else 'chưa chạy'}"
                  f" • đã chạy {_since_txt(snap.get('since'))}")
+    if snap.get('connected_at'):
+        lines.append(f"• Kết nối ổn định: {_since_txt(snap.get('connected_at'))}"
+                     f" • nhịp tim: <b>{snap.get('beats') or 0}</b>")
     lines.append(f"• Dòng cuối: <code>{esc(str(snap.get('last_line') or '—')[:120])}</code>")
     if snap.get('last_output_ts'):
         lines.append(f"• Nhận log cách đây: {_since_txt(snap.get('last_output_ts'))}")
+    if snap.get('last_rc') is not None:
+        lines.append(f"• Mã thoát SSH gần nhất: <code>{esc(snap.get('last_rc'))}</code>")
     if snap.get('command'):
         lines.append(f"• Lệnh: <code>{esc(str(snap.get('command'))[:180])}</code>")
     if snap.get('last_error'):
@@ -399,10 +415,11 @@ def keepalive_text(cfg, snap):
         tail = [str(x)[:180] for x in raw[-14:]]
         lines.append('<pre>' + esc('\n'.join(tail)) + '</pre>')
     else:
-        lines.append('<i>Chưa có log — keepalive chưa kết nối SSH lần nào.</i>')
+        lines.append('<i>Chưa có log — keepalive chưa kết nối SSH lần nào. '
+                     'Bấm "Test keepalive" để kiểm tra ngay.</i>')
     lines.append('')
     lines.append('💡 "Test keepalive" mở một phiên SSH mới tới đúng Codespace đang chọn, '
-                 'in hostname + giờ máy để xác nhận.')
+                 'in hostname + giờ máy để xác nhận. "Tải log đầy đủ" gửi file log của bot.')
     return '\n'.join(lines)
 
 
@@ -410,6 +427,7 @@ def keepalive_kb(cfg):
     ka = 'TẮT' if cfg.get('keepalive_enabled') else 'BẬT'
     return kb([
         [('🔁 Làm mới log', 'ka:log'), ('🧪 Test keepalive', 'ka:test')],
+        [('♻️ Mở lại phiên SSH', 'ka:restart'), ('📄 Tải log đầy đủ', 'ka:file')],
         [(f"🔄 {ka} keepalive", 'set:ka'), ('🗑 Xóa log', 'ka:clear')],
         [('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')],
     ])
@@ -421,6 +439,8 @@ def keepalive_test_text(cfg, snap, res):
     lines = ['🧪 <b>TEST KEEPALIVE</b>', '']
     lines.append(f"• Codespace đang chọn: <code>{esc(cfg.get('codespace') or '(chưa chọn)')}</code>")
     lines.append(f"• Keepalive đích: <code>{esc(snap.get('target') or '(chưa chạy)')}</code>")
+    if snap.get('target') and cfg.get('codespace') and snap.get('target') != cfg.get('codespace'):
+        lines.append('　└ ⚠️ Phiên keepalive đang trỏ Codespace KHÁC — bấm "Mở lại phiên SSH".')
     ok = bool(res.get('ok'))
     lines.append(f"• Kết quả SSH: {'✅ OK' if ok else '❌ LỖI'} (rc={esc(res.get('rc'))})")
     out = str(res.get('out') or '').strip()
@@ -431,9 +451,17 @@ def keepalive_test_text(cfg, snap, res):
         lines.append('')
         lines.append('⚠️ ' + esc(str(res.get('error'))[:500]))
     if ok:
+        m = None
+        for ln in out.splitlines():
+            if ln.strip().startswith('KA_TARGET='):
+                m = ln.strip().split('=', 1)[1]
         lines.append('')
-        lines.append('✅ Lệnh được chạy trên đúng Codespace đang chọn. Nếu log keepalive có dòng '
-                     '<code>ssh&gt; ...</code> cập nhật đều thì keepalive đang hoạt động.')
+        if m:
+            lines.append(f"✅ Lệnh chạy trên máy <code>{esc(m)}</code>. Nếu log keepalive có dòng "
+                         '<code>ssh&gt; KA_BEAT …</code> tăng đều thì keepalive đang hoạt động.')
+        else:
+            lines.append('✅ Lệnh được chạy trên đúng Codespace đang chọn. Hãy xem log keepalive '
+                         'để chắc chắn có dòng <code>ssh&gt; KA_BEAT …</code>.')
     else:
         lines.append('')
         lines.append('💡 Kiểm tra: GitHub token còn hạn/đủ scope <code>codespace</code>, '
@@ -444,7 +472,8 @@ def keepalive_test_text(cfg, snap, res):
 def keepalive_test_kb():
     return kb([
         [('📜 Log keepalive', 'ka:log'), ('🧪 Test lại', 'ka:test')],
-        [('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')],
+        [('📄 Tải log đầy đủ', 'ka:file'), ('⚙️ Cài đặt', 'set:menu')],
+        [('🏠 Trang chính', 'home')],
     ])
 
 

@@ -1,14 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Giữ Codespace không bị dừng vì idle timeout (tái hiện keepalive.ps1).
+"""Giữ Codespace không bị dừng vì idle timeout (bản v2).
 
-Mở 1 phiên SSH dài hạn, in 'date' mỗi N giây -> GitHub tính là hoạt động.
-Lưu ý: KHÔNG vượt qua giới hạn cứng của GitHub (nếu có); xem README.
+Mở 1 phiên SSH dài hạn tới ĐÚNG Codespace đang chọn, in một "nhịp tim" mỗi N
+giây -> GitHub tính là đang hoạt động. Bản v2 sửa các lỗi của bản cũ:
+
+* có thread đọc log riêng nên có thể đổi/tắt keepalive NGAY cả khi SSH đang mở;
+* tự phát hiện phiên SSH treo (không in log quá lâu) rồi mở lại;
+* ghi lại hostname thật của máy đích để đối chiếu với Codespace đang chọn;
+* log có timestamp, số nhịp tim, mã thoát và lỗi gần nhất — xem được từ Telegram.
 """
 import collections
 import os
+import queue
 import subprocess
 import threading
 import time
+
+# Thời gian tối đa chờ log trước khi coi phiên SSH là treo (giây).
+STALL_MIN = 180
 
 
 class Keepalive:
@@ -26,11 +35,18 @@ class Keepalive:
         self.last_line = ''
         self.last_output_ts = 0.0
         self.started_ts = 0.0
+        self.connected_ts = 0.0
         self.target = ''
+        self.remote_host = ''
         self.command = ''
         self.restarts = 0
+        self.beats = 0
+        self.attempts = 0
+        self.last_rc = None
         self.last_error = ''
-        self.lines = collections.deque(maxlen=200)
+        self.retry_at = 0.0
+        self.lines = collections.deque(maxlen=300)
+        self._wake = threading.Event()
         self.t = threading.Thread(target=self._loop, name='keepalive', daemon=True)
 
     # ---------- log ----------
@@ -75,7 +91,18 @@ class Keepalive:
                 pass
         self._record('keepalive: đã xóa log theo yêu cầu')
 
+    def read_logfile(self, max_bytes=180000):
+        """Đọc file log đầy đủ (dùng cho nút tải log trong Telegram)."""
+        if not self.log_path:
+            return ''
+        try:
+            with open(self.log_path, 'r', encoding='utf-8', errors='replace') as f:
+                data = f.read()
+        except OSError:
+            return ''
+        return data[-max_bytes:]
 
+    # ---------- vòng đời ----------
     def start(self):
         self._trim_logfile()
         self._log('keepalive: bot khởi động (chờ cấu hình)')
@@ -83,8 +110,15 @@ class Keepalive:
 
     def stop(self):
         self.stopped = True
+        self._wake.set()
         self._log('keepalive: dừng theo yêu cầu')
         self._kill_proc()
+
+    def restart(self):
+        """Buộc mở lại phiên SSH (dùng sau khi đổi Codespace / sửa lỗi)."""
+        self._log('keepalive: yêu cầu mở lại phiên SSH')
+        self._kill_proc()
+        self._wake.set()
 
     def _kill_proc(self):
         with self.lock:
@@ -104,7 +138,10 @@ class Keepalive:
         with self.lock:
             return {'state': self.state, 'last_line': self.last_line,
                     'restarts': self.restarts, 'since': self.started_ts,
-                    'target': self.target, 'command': self.command,
+                    'connected_at': self.connected_ts,
+                    'target': self.target, 'host': self.remote_host,
+                    'command': self.command, 'beats': self.beats,
+                    'attempts': self.attempts, 'last_rc': self.last_rc,
                     'pid': (self.proc.pid if self.proc else 0),
                     'last_output_ts': self.last_output_ts,
                     'log_path': self.log_path,
@@ -122,24 +159,32 @@ class Keepalive:
             except Exception:
                 pass
 
+    # ---------- supervisor ----------
     def _loop(self):
         while not self.stopped:
             try:
                 if not self.cfg.get('keepalive_enabled'):
+                    if self.proc:
+                        self._kill_proc()
                     self._set('off')
-                    time.sleep(5)
+                    self._wake.wait(3)
+                    self._wake.clear()
                     continue
                 name = self.cfg.get('codespace') or ''
                 if not (name and self.cfg.has_github):
                     self._set('chưa cấu hình')
-                    time.sleep(15)
+                    self._wake.wait(10)
+                    self._wake.clear()
                     continue
                 st = self.gh.codespace_state(name)
                 if st != 'Available':
+                    if self.proc:
+                        self._kill_proc()
                     self._set(f'chờ codespace ({st})')
                     self._notify(f'⚠️ Codespace đang {st} — keepalive tạm nghỉ, bot sẽ tự thử lại.',
                                  'ka-' + str(st), 3600)
-                    time.sleep(60)
+                    self._wake.wait(30)
+                    self._wake.clear()
                     continue
                 # Đảm bảo SSH key đã đăng ký trước khi mở phiên (lần đầu trên tài khoản mới)
                 try:
@@ -153,65 +198,175 @@ class Keepalive:
                     self.last_error = f'ensure ssh key: {e}'
                     self._log('keepalive: ensure ssh key loi: ' + str(e)[:200])
                 interval = max(15, min(300, int(self.cfg.get('keepalive_interval') or 60)))
-                remote_cmd = f'script -qec "while true; do date; touch /workspaces/.ka 2>/dev/null; sleep {interval}; done" /dev/null'
-                self.log(f'keepalive: mo phien ssh moi -> {name}')
-                try:
-                    p = self.gh.spawn(['codespace', 'ssh', '-c', name, '--', remote_cmd])
-                except Exception as e:
-                    self.last_error = str(e)
-                    self._set('lỗi mở ssh')
-                    self._log(f'keepalive: khong mo duoc ssh -> {name}: {e}')
-                    time.sleep(15)
-                    continue
-                with self.lock:
-                    self.proc = p
-                    self.state = 'running'
-                    self.started_ts = time.time()
-                    self.target = name
-                    self.command = f'gh codespace ssh -c {name} -- {remote_cmd}'
-                self._log(f'keepalive: SSH pid {p.pid} -> {name}')
-                out_tail = []
-                try:
-                    for line in iter(p.stdout.readline, ''):
-                        if self.stopped:
-                            break
-                        line = line.strip()
-                        if line:
-                            self.last_line = line
-                            self.last_output_ts = time.time()
-                            out_tail.append(line)
-                            self._record('ssh> ' + line)
-                            if len(out_tail) > 8:
-                                out_tail.pop(0)
-                except Exception as e:
-                    self._log('keepalive: doc stdout loi: ' + str(e)[:150])
-                try:
-                    p.wait(timeout=10)
-                except Exception:
-                    pass
-                elapsed = time.time() - self.started_ts
-                rc = p.returncode
-                self._kill_proc()
-                self.log(f'keepalive: phien ssh ket thuc rc={rc} sau {int(elapsed)}s')
-                self._record(f'keepalive: phien ssh ket thuc rc={rc} sau {int(elapsed)}s')
-                if elapsed < 30 and rc not in (0, None):
-                    tail = ' | '.join(out_tail[-3:])[:280]
-                    self.last_error = (f'gh codespace ssh rc={rc}: {tail}' if tail
-                                       else f'gh codespace ssh thất bại (rc={rc})')
-                    self._set('lỗi ssh')
-                    self._record('keepalive: LOI ' + self.last_error)
-                    # cho phép kiểm tra lại SSH key ở vòng sau (trường hợp key mới đăng ký)
-                    try:
-                        self.gh._ssh_ok_ts = 0.0
-                    except Exception:
-                        pass
-                    self._notify('⚠️ Keepalive không mở được SSH (rc=%s). %s'
-                                 % (rc, tail[:150] if tail else ''), 'ka-sshfail', 3600)
-                    time.sleep(30)
-                else:
-                    time.sleep(5)
+                self._run_session(name, interval)
             except Exception as e:
                 self.last_error = str(e)
                 self._record('keepalive: exception ' + str(e)[:200])
                 if not self.stopped:
-                    time.sleep(15)
+                    self._wake.wait(15)
+                    self._wake.clear()
+
+    def _run_session(self, name, interval):
+        remote_cmd = (
+            'echo KA_HOST="$(hostname)"; '
+            'echo "KA_CODE=$PWD"; '
+            'while true; do echo "KA_BEAT $(date -u +%Y-%m-%dT%H:%M:%SZ)"; sleep %d; done'
+            % interval)
+        self._log(f'keepalive: mở SSH -> {name} (nhịp {interval}s)')
+        self.attempts += 1
+        try:
+            p = self.gh.spawn(['codespace', 'ssh', '-c', name, '--', remote_cmd])
+        except Exception as e:
+            self.last_error = str(e)
+            self._set('lỗi mở ssh')
+            self._log(f'keepalive: khong mo duoc ssh -> {name}: {e}')
+            self._backoff(15)
+            return
+
+        now = time.time()
+        with self.lock:
+            self.proc = p
+            self.state = 'đang kết nối…'
+            self.started_ts = now
+            self.connected_ts = 0.0
+            self.target = name
+            self.remote_host = ''
+            self.beats = 0
+            self.last_rc = None
+            self.command = f'gh codespace ssh -c {name} -- {remote_cmd[:120]}'
+        self.restarts = max(0, self.attempts - 1)
+        self._log(f'keepalive: SSH pid {p.pid} -> {name}')
+
+        q = queue.Queue()
+        reader = threading.Thread(target=self._pump, args=(p, q), daemon=True)
+        reader.start()
+
+        got_output = False
+        last_alive_check = 0.0
+        exit_reason = ''
+        while True:
+            if self.stopped:
+                exit_reason = 'bot dừng'
+                break
+            if not self.cfg.get('keepalive_enabled'):
+                exit_reason = 'đã tắt keepalive'
+                break
+            if (self.cfg.get('codespace') or '') != name:
+                exit_reason = 'đổi Codespace'
+                break
+            try:
+                line = q.get(timeout=1.0)
+            except queue.Empty:
+                line = None
+            if line is None and not reader.is_alive():
+                exit_reason = exit_reason or 'SSH kết thúc'
+                break
+            if line:
+                got_output = True
+                self._handle_line(line, name)
+            now = time.time()
+            if got_output:
+                self._set('running')
+            # phát hiện treo: không có log quá lâu
+            limit = max(STALL_MIN, interval * 3 + 60)
+            if self.connected_ts and now - self.last_output_ts > limit:
+                exit_reason = f'không có log > {int(limit)}s (treo)'
+                self.last_error = 'Phiên SSH không in log — sẽ mở lại.'
+                self._log('keepalive: ' + self.last_error)
+                self._kill_proc()
+                break
+            if now - last_alive_check > 5:
+                last_alive_check = now
+                if p.poll() is not None:
+                    exit_reason = 'SSH kết thúc'
+                    break
+
+        rc = None
+        try:
+            if p.poll() is None:
+                try:
+                    p.wait(timeout=8)
+                except Exception:
+                    p.terminate()
+            rc = p.returncode
+        except Exception:
+            rc = None
+        with self.lock:
+            if self.proc is p:
+                self.proc = None
+            self.last_rc = rc
+        elapsed = time.time() - self.connected_ts if self.connected_ts else 0
+        msg = f'keepalive: phiên SSH kết thúc ({exit_reason}, rc={rc}) sau {int(elapsed)}s'
+        self._log(msg)
+
+        # SSH lỗi ngay (<30s) => log lỗi + thử đăng ký lại key ở vòng sau
+        if self.connected_ts == 0 or elapsed < 30:
+            tail = ' | '.join([str(x) for x in list(self.lines)[-3:]])[:280]
+            self.last_error = (f'gh codespace ssh rc={rc}: {tail}' if tail
+                               else f'gh codespace ssh thất bại (rc={rc})')
+            self._set('lỗi ssh')
+            try:
+                self.gh._ssh_ok_ts = 0.0
+            except Exception:
+                pass
+            self._notify('⚠️ Keepalive không mở được SSH (rc=%s). %s'
+                         % (rc, tail[:150] if tail else ''), 'ka-sshfail', 3600)
+            self._backoff(30)
+        else:
+            if exit_reason in ('đã tắt keepalive', 'đổi Codespace', 'bot dừng'):
+                self._set('off' if exit_reason != 'đổi Codespace' else 'đang chuyển Codespace')
+                self._wake.wait(2)
+                self._wake.clear()
+            else:
+                self._backoff(5)
+
+    def _pump(self, p, q):
+        try:
+            for line in iter(p.stdout.readline, ''):
+                q.put(line.rstrip('\r\n'))
+        except Exception:
+            pass
+        finally:
+            q.put(None)
+
+    def _handle_line(self, line, name):
+        line = str(line or '').strip()
+        if not line:
+            return
+        now = time.time()
+        with self.lock:
+            self.last_line = line
+            self.last_output_ts = now
+            if line.startswith('KA_HOST='):
+                self.remote_host = line.split('=', 1)[1].strip()
+                self.connected_ts = now
+                self.state = 'running'
+            elif line.startswith('KA_BEAT'):
+                self.beats += 1
+                self.connected_ts = self.connected_ts or now
+                self.state = 'running'
+        self._record('ssh> ' + line)
+
+    def _backoff(self, seconds):
+        self.retry_at = time.time() + seconds
+        self._wake.wait(seconds)
+        self._wake.clear()
+
+
+class FakeKeepalive:
+    """Bản giả cho test: không mở SSH, chỉ trả snapshot cố định."""
+
+    def __init__(self, snap=None):
+        self.snap = snap or {}
+
+    def snapshot(self):
+        return dict(self.snap)
+
+    def clear_log(self):
+        return None
+
+    def restart(self):
+        return None
+
+    def read_logfile(self, max_bytes=180000):
+        return ''
