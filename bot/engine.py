@@ -64,6 +64,7 @@ class Engine:
         self.pending = None
         self._rst_choices = []
         self._cs_choices = []
+        self._repo_choices = []
         self._probe_cache = (0.0, None)
         self._act_cache = (0.0, None)
         self._bk_opts = {'keep_local': False, 'restart': True}
@@ -177,6 +178,9 @@ class Engine:
     def cmd_settings(self, chat_id, args):
         self.show_settings(chat_id)
 
+    def cmd_repo(self, chat_id, args):
+        self.show_repo(chat_id)
+
     def cmd_setup(self, chat_id, args):
         self.start_job('Cài môi trường (setup)', chat_id, self.worker_setup)
 
@@ -261,6 +265,68 @@ class Engine:
             self.tg.edit_message(chat_id, mid, text, buttons=k)
         else:
             self.tg.send_message(chat_id, text, buttons=k)
+
+    def show_repo(self, chat_id, mid=None):
+        text = ui.repo_text(self.cfg)
+        k = ui.repo_kb(self.cfg)
+        if mid:
+            self.tg.edit_message(chat_id, mid, text, buttons=k)
+        else:
+            self.tg.send_message(chat_id, text, buttons=k)
+
+    def show_repo_list(self, chat_id, mid=None):
+        if not self.cfg.has_github:
+            self.tg.send_message(chat_id, '❌ Cần GitHub token trước (/settings).')
+            return
+        self.tg.edit_message(chat_id, mid, '🔍 Đang lấy danh sách repo…')
+        repos = self.gh.repo_list(30)
+        self._repo_choices = repos
+        if not repos:
+            self.tg.edit_message(
+                chat_id, mid,
+                '❌ Không lấy được repo nào.\n'
+                '• Kiểm tra GitHub token còn hạn và có scope <code>repo</code>.\n'
+                '• Hoặc dùng "🆕 Tạo repo mới" / "✏️ Nhập owner/repo".',
+                buttons=ui.repo_kb(self.cfg))
+            return
+        self.tg.edit_message(chat_id, mid, ui.repo_list_text(repos, self.cfg),
+                             buttons=ui.repo_list_kb(repos))
+
+    def _repo_full(self, text):
+        """Chuẩn hóa owner/repo hoặc tên repo ngắn (thêm login)."""
+        repo = (text or '').strip().strip('`').strip()
+        repo = re.sub(r'^https?://github\.com/', '', repo).strip('/')
+        if repo.endswith('.git'):
+            repo = repo[:-4]
+        if not repo:
+            return ''
+        if '/' not in repo:
+            login = self.cfg.get('github_login') or self.gh.api_user() or ''
+            if not login:
+                return ''
+            repo = f'{login}/{repo}'
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repo):
+            return ''
+        return repo
+
+    def _apply_repo(self, chat_id, text, mid, create=False):
+        repo = self._repo_full(text)
+        if not repo:
+            self.tg.send_message(chat_id, '❌ Repo không hợp lệ. Gửi dạng <code>owner/repo</code> '
+                                          'hoặc tên repo (bot tự thêm tài khoản).')
+            return
+        if create and not self.gh.repo_exists(repo):
+            self.tg.send_message(chat_id, f'📦 Đang tạo repo private <code>{esc(repo)}</code>…')
+            r = self.gh.repo_create(repo, private=True)
+            if not r.ok:
+                self.tg.send_message(chat_id, '❌ Không tạo được repo: '
+                                     + esc((r.err or r.out or 'không rõ')[-300:]))
+                return
+        self.cfg.set('cs_repo', repo)
+        self._try_delete(chat_id, mid)
+        self.tg.send_message(chat_id, f'✅ Đã đặt repo: <code>{esc(repo)}</code>\n'
+                                      'Dùng repo này cho Codespace và VM Actions.')
+        self.show_repo(chat_id)
 
     def show_vm(self, chat_id, mid=None):
         probe = None
@@ -501,6 +567,34 @@ class Engine:
                 buttons=kb([[('❌ Bỏ qua', 'set:menu')]]))
         elif act == 'odpush':
             self.start_job('Đồng bộ OneDrive (setup)', chat_id, self.worker_setup)
+        elif act == 'repo':
+            self.show_repo(chat_id, mid=mid)
+        elif act == 'repol':
+            self.show_repo_list(chat_id, mid=mid)
+        elif act == 'repon':
+            self.pending = {'chat_id': chat_id, 'kind': 'repon'}
+            self.tg.edit_message(
+                chat_id, mid,
+                '🆕 <b>Tạo repo mới</b> (private) — gửi <b>tên repo</b> hoặc <code>owner/repo</code>.\n'
+                'Ví dụ: <code>winvm-tools</code> → tạo trong tài khoản của bạn.\n'
+                '• Gõ /cancel để bỏ qua.',
+                buttons=kb([[('❌ Bỏ qua', 'set:repo')]]))
+        elif act == 'repoi':
+            self.pending = {'chat_id': chat_id, 'kind': 'repo'}
+            self.tg.edit_message(
+                chat_id, mid,
+                '✏️ Gửi <b>owner/repo</b> (hoặc tên repo ngắn) để dùng cho Codespace/Actions.\n'
+                '• Gõ /cancel để bỏ qua.',
+                buttons=kb([[('❌ Bỏ qua', 'set:repo')]]))
+        elif act == 'repop':
+            idx = int(p[2]) if len(p) > 2 else -1
+            if 0 <= idx < len(self._repo_choices):
+                row = self._repo_choices[idx]
+                name = str(row.get('nameWithOwner') or row.get('name') or '')
+                if name:
+                    self.cfg.set('cs_repo', name)
+                    self.tg.send_message(chat_id, f'✅ Đã đặt repo: <code>{esc(name)}</code>')
+            self.show_repo(chat_id, mid=mid)
         elif act in ('cs', 'csl'):
             self.tg.edit_message(chat_id, mid, '🔍 Đang lấy danh sách codespace…')
             lst = self.gh.codespace_list()
@@ -665,6 +759,10 @@ class Engine:
             self.cfg.set('cs_repo', repo)
             self._try_delete(chat_id, mid)
             self.start_job('Tạo Codespace', chat_id, self.worker_cs_create)
+        elif kind == 'repo':
+            self._apply_repo(chat_id, text, mid, create=False)
+        elif kind == 'repon':
+            self._apply_repo(chat_id, text, mid, create=True)
         elif kind == 'tskey':
             key = text.strip().strip('"').strip("'")
             if not key.startswith('tskey-'):

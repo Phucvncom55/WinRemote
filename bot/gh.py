@@ -240,6 +240,57 @@ class GhCli:
             args.append('--private')
         return self.run(args, timeout=180)
 
+    def repo_list(self, limit=30):
+        """Danh sách repo của tài khoản (dùng để đổi repo cho Codespace/Actions)."""
+        r = self.run(['repo', 'list', '--json', 'nameWithOwner,visibility,updatedAt',
+                      '--limit', str(int(limit))], timeout=120)
+        if not r.ok:
+            return []
+        txt = r.out
+        i, j = txt.find('['), txt.rfind(']')
+        if i < 0 or j < 0:
+            return []
+        try:
+            data = json.loads(txt[i:j + 1])
+        except ValueError:
+            return []
+        return data if isinstance(data, list) else []
+
+    def api_json(self, path, extra=None, timeout=90):
+        """Gọi gh api và parse JSON (trả None nếu lỗi)."""
+        args = ['api', path] + list(extra or [])
+        r = self.run(args, timeout=timeout)
+        if not r.ok:
+            return None
+        txt = (r.out or '').strip()
+        if not txt:
+            return None
+        try:
+            return json.loads(txt)
+        except ValueError:
+            i, j = txt.find('{'), txt.rfind('}')
+            if i >= 0 and j > i:
+                try:
+                    return json.loads(txt[i:j + 1])
+                except ValueError:
+                    pass
+            return None
+
+    # ---------- codespaces (chi tiết + quota) ----------
+    def codespace_detail(self, name):
+        """Chi tiết codespace: machine cpus/RAM/disk, state, createdAt, lastUsedAt."""
+        return self.api_json('user/codespaces/' + str(name))
+
+    def billing_usage_summary(self, login, year=None, month=None):
+        """Báo cáo usage (enhanced billing) — None nếu token không đủ quyền."""
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        year = int(year or now.year)
+        month = int(month or now.month)
+        return self.api_json(
+            f'users/{login}/settings/billing/usage/summary',
+            ['-X', 'GET', '-f', f'year={year}', '-f', f'month={month}'])
+
     # ---------- GitHub Actions ----------
     def repo_file_sha(self, repo, path):
         r = self.run(['api', f'repos/{repo}/contents/{path}', '--jq', '.sha'], timeout=90)

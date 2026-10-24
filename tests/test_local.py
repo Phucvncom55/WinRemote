@@ -179,6 +179,12 @@ class FakeGh:
         self.created_repos.append(repo)
         return GhResult(0, '', '')
 
+    def repo_list(self, limit=30):
+        return [
+            {'nameWithOwner': 'phuc/winvm-codespace', 'visibility': 'private'},
+            {'nameWithOwner': 'phuc/winvm-tools', 'visibility': 'public'},
+        ]
+
     def codespace_create(self, repo, machine):
         self.created_cs = getattr(self, 'created_cs', [])
         self.created_cs.append((repo, machine))
@@ -467,6 +473,38 @@ def test_settings_flows():
         env.cleanup()
 
 
+def test_repo_flow():
+    env = Env()
+    try:
+        env.cfg.set('github_token', 'ghp_test')
+        env.cfg.set('github_login', 'phuc')
+        env.cfg.set('owner_chat_id', OWNER)
+        env.send('/repo')
+        env.wait('REPO CHO CODESPACE')
+        # chọn repo có sẵn
+        env.cb('set:repol', mid=950)
+        env.wait('CHỌN REPO')
+        env.cb('set:repop:1', mid=951)
+        env.wait('winvm-tools')
+        assert env.cfg.get('cs_repo') == 'phuc/winvm-tools'
+        # nhập owner/repo
+        env.cb('set:repoi', mid=952)
+        env.wait('owner/repo')
+        env.send('phuc/khac', mid=40)
+        env.wait('Đã đặt repo')
+        assert env.cfg.get('cs_repo') == 'phuc/khac'
+        # tạo repo mới từ tên ngắn
+        env.gh.repo_exists = lambda repo: False
+        env.cb('set:repon', mid=953)
+        env.wait('Tạo repo mới')
+        env.send('repo-moi', mid=41)
+        env.wait('repo-moi')
+        assert env.cfg.get('cs_repo') == 'phuc/repo-moi'
+        assert env.gh.created_repos == ['phuc/repo-moi']
+    finally:
+        env.cleanup()
+
+
 def test_backup_flow():
     env = Env()
     try:
@@ -745,6 +783,7 @@ TESTS = [
     test_claim_status,
     test_nonowner_ignored,
     test_settings_flows,
+    test_repo_flow,
     test_backup_flow,
     test_backup_cancel,
     test_restore_flow,

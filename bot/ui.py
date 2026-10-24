@@ -78,7 +78,7 @@ def h_start(cfg, claimed=False):
         lines.append('👑 Bạn là <b>chủ sở hữu</b> bot này.')
     lines.append('')
     lines.append('Lệnh chính: /status • /backup • /restore • /setup')
-    lines.append('Khác: /vm • /actions • /ssh • /cleanup • /settings')
+    lines.append('Khác: /vm • /actions • /repo • /ssh • /cleanup • /settings')
     if not (cfg.has_github and cfg.has_onedrive and cfg.has_codespace):
         missing = []
         if not cfg.has_github:
@@ -228,12 +228,64 @@ def settings_kb(cfg):
     return kb([
         [('🔑 GitHub token', 'set:gh'), ('☁️ OneDrive token', 'set:od')],
         [(f"🧩 Codespace: {shorten(cfg.get('codespace') or 'chọn…', 18)}", 'set:cs')],
+        [(f"📦 Repo: {shorten(cfg.get('cs_repo') or 'chưa đặt', 24)}", 'set:repo')],
         [('🆕 Tạo Codespace mới (4c/16G/32G)', 'set:csnew')],
         [(f"🔄 Keepalive: {ka}", 'set:ka'),
          (f"⏱ {cfg.get('keepalive_interval')}s", 'set:kaint')],
         [(f"🖥 VM: {vm['cores']}c/{vm['ram_gb']}G/{vm['disk_gb']}G", 'set:vmmenu')],
         [('👤 Tài khoản', 'set:acc'), ('🖥 VM Actions', 'act:menu'), ('🏠 Trang chính', 'home')],
     ])
+
+
+def repo_text(cfg):
+    repo = cfg.get('cs_repo') or ''
+    login = cfg.get('github_login') or ''
+    lines = ['📦 <b>REPO CHO CODESPACE & ACTIONS</b>', '']
+    if repo:
+        lines.append(f"• Đang dùng: <code>{esc(repo)}</code>")
+    else:
+        lines.append('• Đang dùng: <b>chưa đặt</b> (bot tự tạo <code>winvm-codespace</code> khi cần)')
+    if login:
+        lines.append(f"• Tài khoản GitHub: <b>{esc(login)}</b>")
+    lines.append('• Repo private được dùng để tạo Codespace và chạy workflow Windows Actions.')
+    lines.append('• Đổi repo <b>không</b> xóa Codespace cũ — chỉ đổi đích cho lần tạo/chạy sau.')
+    lines.append('')
+    lines.append('Chọn thao tác bên dưới:')
+    return '\n'.join(lines)
+
+
+def repo_kb(cfg):
+    return kb([
+        [('🔍 Chọn repo có sẵn', 'set:repol')],
+        [('🆕 Tạo repo mới (private)', 'set:repon'), ('✏️ Nhập owner/repo', 'set:repoi')],
+        [('⬅️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')],
+    ])
+
+
+def repo_list_text(repos, cfg):
+    lines = ['📦 <b>CHỌN REPO</b>', '']
+    if not repos:
+        lines.append('Không lấy được danh sách repo (kiểm tra GitHub token).')
+        return '\n'.join(lines)
+    cur = (cfg.get('cs_repo') or '').lower()
+    for i, row in enumerate(repos[:10]):
+        name = str(row.get('nameWithOwner') or row.get('name') or '?')
+        vis = str(row.get('visibility') or '').lower()
+        mark = '✅' if name.lower() == cur else ('🔒' if vis == 'private' else '🌐')
+        lines.append(f"　{i + 1}. {mark} <code>{esc(name)}</code>")
+    lines.append('')
+    lines.append('Chọn repo bên dưới:')
+    return '\n'.join(lines)
+
+
+def repo_list_kb(repos):
+    rows = []
+    for i, row in enumerate(repos[:10]):
+        name = str(row.get('nameWithOwner') or row.get('name') or '?')
+        rows.append([(f"{i + 1}. {shorten(name, 34)}", f'set:repop:{i}')])
+    rows.append([('⬅️ Repo', 'set:repo'), ('🏠 Trang chính', 'home')])
+    return kb(rows)
+
 
 
 def vmconf_text(cfg):
