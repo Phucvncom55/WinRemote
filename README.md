@@ -94,8 +94,10 @@ Thay `github_pat_xxx` bằng **fine-grained PAT**. Tạo nhanh tại:
 - **Repository access:** Only select repositories → `WinRemote-secrets`
 - **Permissions:** Contents = **Read-only** (Metadata tự động có)
 
-Sau đó dán token vào lệnh trên. PAT này chỉ đọc được token bot; nếu lộ cũng không
-sửa được code hay repo khác.
+Sau đó dán token vào lệnh trên. PAT này **chỉ đọc** repo secrets, không sửa được
+code hay repo khác. Tuy nhiên nó đọc được mọi file trong repo secrets — gồm token bot
+và `bot-config.json` (có thể chứa GitHub/OneDrive token). Vì vậy không chia sẻ notebook
+hoặc dòng lệnh có PAT; nên đặt hạn 7–90 ngày và thu hồi ngay nếu lộ.
 Muốn lệnh gọn hơn, lưu PAT vào **Colab Secrets** với tên `WM_GITHUB_TOKEN`
 (biểu tượng 🔑 ở thanh bên trái, bật quyền cho notebook), sau đó dùng:
 
@@ -192,9 +194,12 @@ bình thường; chỉ mất khả năng khôi phục sau khi Colab reset.
 ## 7. Bảo mật
 
 - Repo secrets phải **private**. Không bao giờ commit token vào repo code public.
-- PAT dùng trong lệnh Colab chỉ nên có **Contents: Read** trên đúng repo secrets.
+- PAT dùng trong lệnh Colab chỉ nên có **Contents: Read** trên đúng repo secrets,
+  đặt thời hạn ngắn (7–90 ngày). PAT đó đọc được cả `token.txt` và `bot-config.json`
+  (có thể chứa GitHub/OneDrive token), nên đừng chia sẻ notebook hoặc dòng lệnh có PAT.
 - Nếu notebook bị chia sẻ hoặc PAT/token bị lộ: thu hồi PAT, tạo bot token mới với
-  @BotFather, cập nhật `secrets/token.txt`, rồi chạy lại.
+  @BotFather, cập nhật `secrets/token.txt`, rồi chạy lại. Nếu GitHub/OneDrive token
+  trong `bot-config.json` bị lộ, thu hồi và nhập lại qua `/settings`.
 - `.env.local` và `secrets/*` đã bị `.gitignore`; chỉ `secrets/README.md` được commit.
 - Bot chỉ phục vụ **một owner** — chat đầu tiên gõ `/start`.
 
