@@ -137,13 +137,16 @@ def account_text(cfg, ka_snap):
 
 # ============================ trạng thái ============================
 
-def status_text(cfg, cs_state, probe, ka_snap, job_info, act=None):
+def status_text(cfg, cs_state, probe, ka_snap, job_info, act=None, quota=None):
     lines = [f"📊 <b>TRẠNG THÁI HỆ THỐNG</b> — {vn_time(fmt='%H:%M %d/%m')}"]
     if not cfg.has_codespace:
         lines.append('🧩 Codespace: <b>chưa chọn</b> — vào /settings trước.')
         return '\n'.join(lines)
     lines.append(f"🧩 Codespace: <code>{esc(cfg.get('codespace'))}</code> — "
                  f"<b>{CS_STATE_VN.get(cs_state, cs_state)}</b>")
+    qb = quota_brief(quota)
+    if qb:
+        lines.append(qb)
     if probe:
         cont = VM_STATE_VN.get(probe.get('container', 'none'), probe.get('container'))
         web = str(probe.get('web') or '000')
@@ -191,7 +194,8 @@ def status_kb(cfg, cs_state, probe, act=None):
     alt = '☁️ Máy Actions'
     if act and act.get('status') in ACT_ACTIVE:
         alt += ' 🟢'
-    rows = [[('🔄 Làm mới', 'st:r'), ('⚙️ Cài đặt', 'set:menu'), ('📜 KA log', 'ka:log')]]
+    rows = [[('🔄 Làm mới', 'st:r'), ('📊 Quota', 'q:show')],
+            [('⚙️ Cài đặt', 'set:menu'), ('📜 KA log', 'ka:log')]]
     if cfg.has_codespace:
         if cs_state == 'Available':
             rows.append([('⏹ Dừng Codespace', 'st:csstop')])
@@ -504,6 +508,23 @@ def _days(days):
     return f'{d} ngày {h} giờ {m:02d} phút'
 
 
+def quota_brief(q):
+    """Một dòng ngắn về thời gian Codespace còn chạy được (dùng cho /status)."""
+    if not q or q.get('error') and not q.get('login'):
+        return ''
+    left = q.get('total_hours_left')
+    if left is None:
+        left = q.get('run_hours_left')
+    if left is None:
+        return ''
+    txt = f"⏳ Hạn mức còn: <b>{_hm(left)}</b>"
+    if left < 48:
+        txt += f" (~{max(0.1, left / 24):.1f} ngày chạy 24/7)"
+    if q.get('days_to_reset') is not None:
+        txt += f" • làm mới sau {q.get('days_to_reset')} ngày"
+    return txt
+
+
 def quota_text(q):
     q = q or {}
     lines = ['📊 <b>HẠN MỨC CODESPACE CÒN LẠI</b>', '']
@@ -544,12 +565,26 @@ def quota_text(q):
         lines.append(f'• Với ổ đĩa {disk} GB: còn khoảng <b>{_days(q.get("storage_days_left"))}</b>')
     lines.append('')
 
-    total = q.get('run_hours_left')
+    total = q.get('total_hours_left')
+    if total is None:
+        total = q.get('run_hours_left')
     if total is not None:
         lines.append('⏱️ <b>TỔNG THỜI GIAN SỬ DỤNG THỰC TẾ CÒN LẠI:</b>')
         lines.append(f'👉 <b>{_hm(total)}</b>')
-        lines.append('　└ giới hạn bởi thời gian chạy máy (vCPU)')
+        if total < 240:
+            lines.append(f'　└ ~<b>{max(0.1, total / 24):.1f} ngày</b> nếu bật máy chạy 24/7')
+        lim = q.get('limited_by') or 'thời gian chạy máy (vCPU)'
+        lines.append(f'　└ giới hạn bởi {esc(lim)}')
+        if q.get('days_to_reset') is not None and q.get('reset_txt'):
+            lines.append(f'　└ hạn mức làm mới ngày <b>{esc(q.get("reset_txt"))}</b> '
+                         f'(còn {q.get("days_to_reset")} ngày)')
         lines.append('')
+    if q.get('run_hours_left') is not None and q.get('storage_days_left') is not None:
+        st_hours = float(q.get('storage_days_left') or 0) * 24.0
+        if st_hours < float(q.get('run_hours_left') or 0):
+            lines.append('⚠️ Lưu trữ sẽ hết <b>trước</b> thời gian chạy máy — dọn backup cũ '
+                         'hoặc tăng dung lượng ổ để dùng hết hạn mức.')
+            lines.append('')
     if q.get('updated'):
         lines.append(f"🕒 Cập nhật: {esc(q.get('updated'))}")
     if q.get('source') == 'api':
@@ -566,10 +601,22 @@ def quota_text(q):
 
 def quota_kb(q=None):
     q = q or {}
-    rows = [[('🔄 Làm mới', 'q:show'), ('📖 Cách tính', 'q:help')]]
-    rows.append([('🌐 Trang billing GitHub', 'https://github.com/settings/billing')])
+    rows = [[('🔄 Làm mới', 'q:show'), ('📖 Cách tính', 'q:help')],
+            [('✏️ Nhập số đã dùng (thủ công)', 'q:set')],
+            [('🌐 Trang billing GitHub', 'https://github.com/settings/billing')]]
     rows.append([('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')])
     return kb(rows)
+
+
+def quota_set_text():
+    return ('✏️ <b>NHẬP SỐ LIỆU ĐÃ DÙNG</b>\n\n'
+            'Mở https://github.com/settings/billing → mục <b>Codespaces</b>, xem '
+            '"Core hours used" và "Storage used".\n\n'
+            'Gửi tin nhắn dạng: <code>&lt;giờ nhân lõi&gt; &lt;GB-tháng&gt;</code>\n'
+            'Ví dụ: <code>6.17 0.15</code>\n'
+            '(Có thể chỉ gửi số giờ nhân lõi.)\n\n'
+            'Bot sẽ tính thời gian còn lại theo số bạn nhập.\n'
+            '• Gõ /cancel để bỏ qua.')
 
 
 def quota_help_text(cfg):

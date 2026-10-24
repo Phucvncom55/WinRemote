@@ -341,6 +341,28 @@ class Engine:
         if q['used_storage_gb_month'] is not None and disk:
             left_st = max(0.0, q['included_storage_gb_month'] - q['used_storage_gb_month'])
             q['storage_days_left'] = left_st / disk * 30.0
+        # Tổng thời gian còn dùng được = min(thời gian chạy, thời gian lưu trữ)
+        q['total_hours_left'] = q['run_hours_left']
+        q['limited_by'] = 'thời gian chạy máy (vCPU)'
+        if q['run_hours_left'] is not None and q['storage_days_left'] is not None:
+            st_hours = float(q['storage_days_left']) * 24.0
+            if st_hours < float(q['run_hours_left']):
+                q['total_hours_left'] = st_hours
+                q['limited_by'] = 'dung lượng lưu trữ (GB-tháng)'
+        # Kỳ hạn mức GitHub làm mới theo tháng dương lịch (giờ UTC)
+        try:
+            import datetime
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            if now_utc.month == 12:
+                nxt = datetime.datetime(now_utc.year + 1, 1, 1, tzinfo=datetime.timezone.utc)
+            else:
+                nxt = datetime.datetime(now_utc.year, now_utc.month + 1, 1,
+                                        tzinfo=datetime.timezone.utc)
+            q['reset_txt'] = nxt.strftime('%d/%m/%Y')
+            q['days_to_reset'] = max(0, int((nxt - now_utc).total_seconds() // 86400))
+        except Exception:
+            q['reset_txt'] = ''
+            q['days_to_reset'] = None
         self._quota_cache = (now, q)
         return q
 
@@ -421,8 +443,15 @@ class Engine:
                 except Exception as e:  # noqa
                     self.log.warn('probe loi: %r', e)
             act = self.get_actions_snapshot()
+            quota = None
+            try:
+                if self.cfg.has_github:
+                    quota = self.get_quota()
+            except Exception:
+                quota = None
             text = ui.status_text(self.cfg, cs_state, probe,
-                                  self.ka.snapshot() if self.ka else None, self.jobs.info(), act)
+                                  self.ka.snapshot() if self.ka else None, self.jobs.info(), act,
+                                  quota=quota)
             k = ui.status_kb(self.cfg, cs_state, probe, act)
             if mid:
                 self.tg.edit_message(chat_id, mid, text, buttons=k)
@@ -714,6 +743,10 @@ class Engine:
                     self.tg.edit_message(chat_id, mid, ui.quota_help_text(self.cfg),
                                          buttons=kb(
                                              [[('⬅️ Quota', 'q:show'), ('🏠 Trang chính', 'home')]]))
+                elif len(p) > 1 and p[1] == 'set':
+                    self.pending = {'chat_id': chat_id, 'kind': 'quota'}
+                    self.tg.edit_message(chat_id, mid, ui.quota_set_text(),
+                                         buttons=kb([[('❌ Bỏ qua', 'q:show')]]))
                 else:
                     self.show_quota(chat_id, mid=mid, force=True)
             elif head == 'job':
@@ -1082,6 +1115,9 @@ class Engine:
             self.cfg.set('keepalive_interval', v)
             self.tg.send_message(chat_id, f'✅ Keepalive mỗi <b>{v}s</b>.')
             self.show_settings(chat_id)
+        elif kind == 'quota':
+            if self._set_quota_manual(chat_id, text):
+                self.show_quota(chat_id, force=True)
         elif kind.startswith('vmf:'):
             self._apply_vmf(chat_id, kind[4:], text)
 
