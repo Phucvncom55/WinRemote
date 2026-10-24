@@ -538,6 +538,7 @@ class Engine:
                                      + esc((r.err or r.out or 'không rõ')[-300:]))
                 return
         self.cfg.set('cs_repo', repo)
+        self._act_cache = (0.0, None)
         self._try_delete(chat_id, mid)
         self.tg.send_message(chat_id, f'✅ Đã đặt repo: <code>{esc(repo)}</code>\n'
                                       'Dùng repo này cho Codespace và VM Actions.')

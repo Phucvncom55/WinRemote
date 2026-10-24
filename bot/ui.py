@@ -77,8 +77,8 @@ def h_start(cfg, claimed=False):
     if claimed:
         lines.append('👑 Bạn là <b>chủ sở hữu</b> bot này.')
     lines.append('')
-    lines.append('Lệnh chính: /status • /backup • /restore • /setup • /quota')
-    lines.append('Khác: /vm • /actions • /repo • /kalog • /ssh • /cleanup • /settings')
+    lines.append('Lệnh chính: /status • /backup • /restore • /setup • /quota • /repo')
+    lines.append('Khác: /vm • /actions • /gdrive • /kalog • /ssh • /cleanup • /settings')
     if not (cfg.has_github and cfg.has_onedrive and cfg.has_codespace):
         missing = []
         if not cfg.has_github:
@@ -103,6 +103,8 @@ def h_help():
             '\n'
             '💾 /backup — backup thủ công (dừng VM an toàn → nén → chia part 1GB → upload).\n'
             '♻️ /restore — chọn thư mục data_backup* mới nhất để khôi phục.\n'
+            '📦 /repo — chọn repo có sẵn, tạo repo mới, hoặc nhập owner/repo.\n'
+            '☁️ /gdrive — gom nhiều tài khoản Google Drive thành 1 ổ lớn (backup/restore).\n'
             '📡 /ssh &lt;lệnh&gt; — chạy bash trong Codespace.\n'
             '🧹 /cleanup — dọn file tạm (~88GB sau restore).\n'
             '🖥 /actions — mở máy Windows tạm trên GitHub Actions (RDP qua Tailscale, ~6 tiếng).\n'
@@ -194,7 +196,7 @@ def status_kb(cfg, cs_state, probe, act=None):
     alt = '☁️ Máy Actions'
     if act and act.get('status') in ACT_ACTIVE:
         alt += ' 🟢'
-    rows = [[('🔄 Làm mới', 'st:r'), ('📊 Quota', 'q:show')],
+    rows = [[('🔄 Làm mới', 'st:r'), ('📊 Quota', 'q:show'), ('📦 Repo', 'set:repo')],
             [('⚙️ Cài đặt', 'set:menu'), ('📜 KA log', 'ka:log')]]
     if cfg.has_codespace:
         if cs_state == 'Available':
@@ -269,7 +271,8 @@ def repo_kb(cfg):
     return kb([
         [('🔍 Chọn repo có sẵn', 'set:repol')],
         [('🆕 Tạo repo mới (private)', 'set:repon'), ('✏️ Nhập owner/repo', 'set:repoi')],
-        [('⬅️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')],
+        [('🖥 VM Actions', 'act:menu'), ('⚙️ Cài đặt', 'set:menu')],
+        [('🏠 Trang chính', 'home')],
     ])
 
 
@@ -844,12 +847,14 @@ def actions_text(cfg, act=None):
 
 def actions_kb(cfg=None):
     win = str((cfg.get('actions_windows') if cfg else '') or 'windows-2025')
-    other = 'windows-2022' if '2025' in win else 'windows-2025'
-    other_txt = '2022' if '2025' in win else '2025'
+    on25 = '✅ ' if '2025' in win else ''
+    on22 = '✅ ' if '2022' in win else ''
     return kb([
         [('🚀 Khởi động VM Actions', 'act:go')],
         [('🔄 Trạng thái run', 'act:st'), ('🕘 Hủy run', 'act:cancel')],
-        [(f"🪟 Đổi sang Windows {other_txt}", f'act:ver:{other}')],
+        [(on25 + '🪟 Windows 2025', 'act:ver:windows-2025'),
+         (on22 + '🪟 Windows 2022', 'act:ver:windows-2022')],
+        [('📦 Đổi repo', 'set:repo')],
         [('🖥 Quản lý VM', 'vm:menu'), ('🏠 Trang chính', 'home')],
     ])
 
