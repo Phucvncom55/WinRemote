@@ -82,6 +82,24 @@ Dùng khi muốn backup sang Google Drive, hoặc gộp nhiều tài khoản th�
 Làm lại bước 1–4 với từng tài khoản Google muốn gộp; bot tạo `gdrive1..N` và một remote
 union `gdrive:` với tổng dung lượng.
 
+**OAuth client riêng (khi Google từ chối client mặc định):**
+
+Bot dùng client công khai của rclone để đăng nhập. Google đang ngừng client này trong 2026;
+nếu bot báo `The provided client secret is invalid` hoặc `invalid_client`, hãy tạo client riêng:
+
+1. `/gdrive` → **🔑 OAuth client riêng** (xem hướng dẫn ngay trong bot).
+2. Vào [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials),
+   tạo project → bật **Google Drive API**.
+3. **OAuth consent screen** → External → thêm email của bạn vào **Test users** → **Publish app**
+   (để Testing, refresh token chỉ sống 7 ngày).
+4. **Create credentials → OAuth client ID → Desktop app**, rồi dán **Client ID** và
+   **Client secret** vào bot.
+5. Bấm **🔗 Thêm tài khoản bằng link** lại. Không cần thêm redirect URI — Desktop app tự
+   chấp nhận loopback `127.0.0.1:53682`.
+
+Client ID/secret lưu trong `bot-config.json` (repo secrets private), không gửi ra ngoài.
+Token đã tạo bằng client nào sẽ tự làm mới bằng client đó.
+
 **Cách 2 — dán JSON từ rclone (nâng cao):**
 
 ```bash
@@ -366,6 +384,7 @@ secrets/README.md     # mô tả repo secrets (token thật không nằm ở đ�
 | `SSH tới Codespace thất bại` | Bot tự tạo/đăng ký key; kiểm tra scope `admin:public_key` |
 | `OneDrive token hết hạn` | `/settings` → OneDrive → **Đăng nhập tự động** lại, hoặc dán token mới |
 | `Google Drive token hết hạn/thu hồi` | `/gdrive` → xóa tài khoản lỗi → **🔗 Thêm tài khoản bằng link** (hoặc dán JSON `rclone authorize "drive"`) |
+| `The provided client secret is invalid` / `invalid_client` | Google đã ngừng client chung của rclone. `/gdrive` → **🔑 OAuth client riêng** → nhập Client ID + secret của Desktop app bạn tự tạo (xem 2.3), rồi thêm tài khoản lại. |
 | `Không thấy backup trên Drive` | `/restore` quét cả hai cloud; kiểm tra `/gdrive → Kiểm tra` và đích backup ở `/backup` |
 | `Keepalive không chạy` | `/kalog` xem hostname/target có đúng Codespace không, bấm **Khởi động lại**; kiểm tra scope `codespace` + `admin:public_key` |
 | `/quota` báo thiếu số liệu | GitHub chỉ cập nhật mỗi giờ; bấm **Nhập số đã dùng** để nhập tay từ trang billing |

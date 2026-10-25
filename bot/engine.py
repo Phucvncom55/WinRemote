@@ -997,6 +997,29 @@ class Engine:
                                  buttons=kb([[('🔗 Thêm bằng link', 'gd:add')],
                                              [('📋 Dán token JSON', 'gd:paste')],
                                              [('☁️ Google Drive', 'set:gdrive')]]))
+        elif act == 'client':
+            self.tg.edit_message(chat_id, mid, ui.gdrive_client_text(self.cfg),
+                                 buttons=ui.gdrive_client_kb(self.cfg))
+        elif act == 'clientid':
+            self.pending = {'chat_id': chat_id, 'kind': 'gdcid'}
+            self.tg.edit_message(
+                chat_id, mid,
+                '✏️ Gửi <b>Client ID</b> của OAuth client (Desktop app) vừa tạo.\n'
+                'Dạng: <code>…apps.googleusercontent.com</code>\n\n/cancel để hủy.',
+                buttons=kb([[('❌ Bỏ qua', 'gd:client')]]))
+        elif act == 'clientsec':
+            self.pending = {'chat_id': chat_id, 'kind': 'gdcsec'}
+            self.tg.edit_message(
+                chat_id, mid,
+                '🔑 Gửi <b>Client secret</b> của OAuth client vừa tạo.\n'
+                'Bot sẽ xóa tin nhắn chứa secret sau khi lưu.\n\n/cancel để hủy.',
+                buttons=kb([[('❌ Bỏ qua', 'gd:client')]]))
+        elif act == 'clientreset':
+            self.cfg.set('gdrive_client_id', '', save=False)
+            self.cfg.set('gdrive_client_secret', '')
+            self.tg.send_message(chat_id, '♻️ Đã quay lại OAuth client mặc định (rclone).')
+            self.tg.edit_message(chat_id, mid, ui.gdrive_client_text(self.cfg),
+                                 buttons=ui.gdrive_client_kb(self.cfg))
         elif act == 'test':
             self.start_job('Kiểm tra Google Drive', chat_id, self.worker_gdrive_sync)
         elif act == 'use':
@@ -1266,6 +1289,29 @@ class Engine:
             self._try_delete(chat_id, mid)
             self.start_job('Thêm Google Drive', chat_id,
                            lambda ctx: self.worker_gdrive_add(ctx, text))
+        elif kind == 'gdcid':
+            cid = text.strip()
+            if not cid.endswith('.apps.googleusercontent.com'):
+                self.tg.send_message(chat_id, '❌ Client ID phải kết thúc bằng '
+                                              '<code>.apps.googleusercontent.com</code>. '
+                                              'Bấm "✏️ Nhập Client ID" để thử lại.')
+                return
+            self.cfg.set('gdrive_client_id', cid)
+            self._try_delete(chat_id, mid)
+            self.tg.send_message(chat_id, '✅ Đã lưu Client ID. Còn thiếu Client secret — '
+                                          'bấm "🔑 Nhập Client secret".')
+            self.show_gdrive_client(chat_id)
+        elif kind == 'gdcsec':
+            sec = text.strip().strip('"').strip("'")
+            if len(sec) < 10 or any(c.isspace() for c in sec):
+                self.tg.send_message(chat_id, '❌ Client secret không hợp lệ (quá ngắn hoặc có '
+                                              'khoảng trắng).')
+                return
+            self.cfg.set('gdrive_client_secret', sec)
+            self._try_delete(chat_id, mid)
+            self.tg.send_message(chat_id, '✅ Đã lưu OAuth client riêng. Bấm "🔗 Thêm tài khoản '
+                                          'bằng link" để đăng nhập lại.')
+            self.show_gdrive_client(chat_id)
         elif kind.startswith('vmf:'):
             self._apply_vmf(chat_id, kind[4:], text)
 
@@ -2252,6 +2298,14 @@ class Engine:
         else:
             self.tg.send_message(chat_id, text, buttons=k)
 
+    def show_gdrive_client(self, chat_id, mid=None):
+        text = ui.gdrive_client_text(self.cfg)
+        k = ui.gdrive_client_kb(self.cfg)
+        if mid:
+            self.tg.edit_message(chat_id, mid, text, buttons=k)
+        else:
+            self.tg.send_message(chat_id, text, buttons=k)
+
     def cmd_gdrive(self, chat_id, args):
         self.show_gdrive(chat_id)
 
@@ -2317,6 +2371,15 @@ class Engine:
             code, self.cfg.get('gdrive_client_id') or None,
             self.cfg.get('gdrive_client_secret') or None)
         if err:
+            low = (err or '').lower()
+            if ('client secret' in low or 'invalid_client' in low
+                    or 'unauthorized_client' in low):
+                raise JobError(
+                    '❌ Google từ chối OAuth client đang dùng: ' + esc(err)
+                    + '\n\nGoogle đang ngừng client chung của rclone trong 2026. '
+                    'Bấm /gdrive → <b>🔑 OAuth client riêng</b> để nhập Client ID + '
+                    'Client secret của bạn (Desktop app), rồi bấm "Thêm tài khoản bằng link" '
+                    'lần nữa.')
             raise JobError('Đăng nhập Google thất bại: ' + esc(err)
                            + '\nBấm /gdrive → "🔗 Thêm tài khoản bằng link" để lấy link mới.')
         self.worker_gdrive_add(ctx, json.dumps(tok))
@@ -2342,6 +2405,11 @@ class Engine:
                 info, err = ghmod.gdrive_info(raw)
             elif rerr:
                 err = rerr
+                low = rerr.lower()
+                if 'client secret' in low or 'invalid_client' in low:
+                    err += ('\n\n<i>Token được tạo bằng OAuth client khác. Nhập đúng client ở '
+                            '/gdrive → 🔑 OAuth client riêng, hoặc dán token mới lấy từ '
+                            'rclone.</i>')
         if not info:
             raise JobError('Không xác minh được token Google Drive:\n'
                            + esc(str(err)[:400]))

@@ -972,6 +972,33 @@ def test_gdrive_flow():
             env.wait('Đã thêm')
             assert seen['code'] == '4/0AbCdEf'
 
+            # OAuth client riêng: nhập Client ID rồi Client secret qua giao diện
+            env.cb('gd:client', mid=1210)
+            env.wait('OAUTH CLIENT GOOGLE DRIVE')
+            env.cb('gd:clientid', mid=1211)
+            n = len(env.events())
+            env.send('1234-abc.apps.googleusercontent.com', mid=6)
+            env.wait('Đã lưu Client ID', since=n)
+            assert env.cfg.get('gdrive_client_id') == '1234-abc.apps.googleusercontent.com'
+            env.cb('gd:clientsec', mid=1212)
+            n = len(env.events())
+            env.send('secret_ABC1234567890', mid=7)
+            env.wait('Đã lưu OAuth client riêng', since=n)
+            assert env.cfg.get('gdrive_client_secret') == 'secret_ABC1234567890'
+
+            # Client ID sai định dạng bị từ chối, cấu hình giữ nguyên
+            env.cb('gd:clientid', mid=1213)
+            n = len(env.events())
+            env.send('khong-phai-client-id', mid=8)
+            env.wait('apps.googleusercontent.com', since=n)
+            assert env.cfg.get('gdrive_client_id') == '1234-abc.apps.googleusercontent.com'
+
+            # Quay lại client mặc định
+            env.cb('gd:clientreset', mid=1214)
+            env.wait('client mặc định')
+            assert env.cfg.get('gdrive_client_id') == ''
+            assert env.cfg.get('gdrive_client_secret') == ''
+
             # Vẫn còn đường dán JSON từ rclone (nâng cao)
             env.cb('gd:paste', mid=1203)
             env.wait('DÁN TOKEN GOOGLE DRIVE')

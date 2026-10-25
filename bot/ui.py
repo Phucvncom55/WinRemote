@@ -448,6 +448,8 @@ def gdrive_text(cfg):
                      % esc(cfg.get('gdrive_remote') or 'gdrive'))
         lines.append('• Tổng dung lượng: ' + usage_line(used, total))
     lines.append(f"• Đang dùng để backup: <b>{'Google Drive' if backend == 'gdrive' else 'OneDrive'}</b>")
+    lines.append('• OAuth client: ' + ('riêng ✅' if cfg.get('gdrive_client_id')
+                                      else 'mặc định (rclone) ⚠️'))
     lines.append('')
     if accs:
         lines.append('📋 <b>Danh sách tài khoản</b>')
@@ -471,7 +473,8 @@ def gdrive_text(cfg):
 
 
 def gdrive_kb(cfg):
-    rows = [[('🔗 Thêm tài khoản bằng link', 'gd:add')]]
+    rows = [[('🔗 Thêm tài khoản bằng link', 'gd:add')],
+            [('🔑 OAuth client riêng', 'gd:client')]]
     if cfg.has_gdrive:
         rows.append([('🧪 Kiểm tra & ghi cấu hình', 'gd:test')])
         cur = (cfg.get('backup_backend') or 'onedrive')
@@ -532,6 +535,9 @@ def gdrive_help_text():
             '<b>📋 Dán token JSON</b>.\n\n'
             '🔁 Làm lại với từng tài khoản Google muốn gộp.\n'
             '💡 Token có <code>refresh_token</code> nên dùng lâu dài; bot tự làm mới khi cần.\n'
+            '⚠️ Nếu Google báo <i>The provided client secret is invalid</i>: mở '
+            '<b>🔑 OAuth client riêng</b> để dùng client của bạn (client chung của rclone '
+            'đang bị Google ngừng trong 2026).\n'
             '⚠️ Chỉ dán trong chat riêng với bot và nên xóa tin nhắn chứa token sau đó.')
 
 
@@ -542,6 +548,43 @@ def gdrive_add_text():
             'Chuỗi cần có <code>access_token</code> và <code>refresh_token</code>. '
             'Bot sẽ kiểm tra dung lượng rồi lưu tài khoản.\n'
             '• Gõ /cancel để bỏ qua.')
+
+
+def gdrive_client_text(cfg):
+    cid = (cfg.get('gdrive_client_id') or '').strip()
+    lines = ['🔑 <b>OAUTH CLIENT GOOGLE DRIVE</b>', '']
+    if cid:
+        lines.append(f'• Client ID: <code>{esc(cid)}</code>')
+        lines.append('• Client secret: '
+                     + ('đã lưu ✅' if cfg.get('gdrive_client_secret') else 'chưa có ❌'))
+    else:
+        lines.append('• Đang dùng client mặc định của rclone ⚠️')
+        lines.append('• Google đang ngừng client này trong 2026. Nếu khi thêm tài khoản bot báo '
+                     '<i>The provided client secret is invalid</i> thì cần client riêng.')
+    lines += ['', '📋 <b>Tạo OAuth client riêng (miễn phí, ~5 phút)</b>',
+              '1. Mở <a href="https://console.cloud.google.com/apis/credentials">Google Cloud '
+              'Console → Credentials</a>.',
+              '2. Tạo project mới (hoặc chọn project có sẵn).',
+              '3. <b>APIs &amp; Services → Library</b> → bật <b>Google Drive API</b>.',
+              '4. <b>OAuth consent screen</b> → External → điền tên, thêm email của bạn vào '
+              '<b>Test users</b>, rồi bấm <b>Publish app</b>.',
+              '5. <b>Create credentials → OAuth client ID → Desktop app</b>.',
+              '6. Copy <b>Client ID</b> và <b>Client secret</b>, dán vào 2 nút bên dưới.',
+              '',
+              '💡 Desktop app tự chấp nhận loopback <code>127.0.0.1:53682</code> — không cần '
+              'thêm redirect URI. Token cũ vẫn làm mới bằng client đã tạo ra nó.',
+              '⚠️ Để app ở chế độ <i>Testing</i>, refresh token chỉ sống 7 ngày — nhớ Publish.',
+              '🔐 Secret chỉ lưu trong bot-config.json (repo secrets private).']
+    return '\n'.join(lines)
+
+
+def gdrive_client_kb(cfg):
+    rows = [[('✏️ Nhập Client ID', 'gd:clientid')],
+            [('🔑 Nhập Client secret', 'gd:clientsec')]]
+    if cfg.get('gdrive_client_id') or cfg.get('gdrive_client_secret'):
+        rows.append([('♻️ Dùng client mặc định (rclone)', 'gd:clientreset')])
+    rows.append([('⬅️ Google Drive', 'set:gdrive')])
+    return kb(rows)
 
 
 def backup_target_text(remote, label, has_gdrive):

@@ -153,10 +153,12 @@ def refresh_onedrive(token_json, client_id=None):
 
 
 # ------------------------- Google Drive -------------------------
-# Client công khai của rclone (dùng khi token được tạo bằng `rclone authorize drive`).
+# Client công khai của rclone (lấy từ backend/drive của rclone, dạng đã giải mã).
+# Google đang ngừng client dùng chung này trong 2026; nên dùng OAuth client riêng
+# (Desktop app) qua /gdrive → "🔑 OAuth client riêng".
 # Có thể override bằng gdrive_client_id / gdrive_client_secret trong bot-config.json.
 GDRIVE_CLIENT_ID = '202264815644.apps.googleusercontent.com'
-GDRIVE_CLIENT_SECRET = 'X4Z3ca8xfWDb1V30epK2XaF7'
+GDRIVE_CLIENT_SECRET = 'X4Z3ca8xfWDb1Voo-F9a7ZxJ'
 GDRIVE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 GDRIVE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 # Loopback của client desktop: sau khi đồng ý, Google chuyển tới địa chỉ này
