@@ -1098,6 +1098,31 @@ def test_oauth_gdrive_link():
         oauth._post = orig
 
 
+def test_gdrive_info_403():
+    """Drive API 403: giữ nguyên thông điệp Google + gợi ý OAuth client riêng."""
+    import io
+    import json as _json
+    import urllib.error
+    from unittest import mock
+    from bot import gh as ghmod
+
+    body = _json.dumps({
+        'error': {'code': 403,
+                  'message': 'Google Drive API has not been used in project 123 before '
+                             'or it is disabled.',
+                  'errors': [{'reason': 'accessNotConfigured'}]},
+    }).encode('utf-8')
+    exc = urllib.error.HTTPError(ghmod.GDRIVE_ABOUT_URL, 403, 'Forbidden', {},
+                                 io.BytesIO(body))
+    with mock.patch.object(ghmod.urllib.request, 'urlopen', side_effect=exc):
+        info, msg = ghmod.gdrive_info(_json.dumps({'access_token': 'x',
+                                                   'refresh_token': 'r'}))
+    assert info is None
+    assert 'HTTP 403' in msg
+    assert 'has not been used' in msg and 'accessNotConfigured' in msg
+    assert 'OAuth client riêng' in msg
+
+
 def test_colab_token_helpers():
     """colab.py đọc token.txt linh hoạt và báo lỗi rõ khi thiếu PAT."""
     import colab
@@ -1241,6 +1266,7 @@ TESTS = [
     test_keepalive_log_callable,
     test_gdrive_flow,
     test_oauth_gdrive_link,
+    test_gdrive_info_403,
     test_colab_token_helpers,
     test_keepalive_supervisor,
 ]

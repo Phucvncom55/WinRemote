@@ -385,6 +385,7 @@ secrets/README.md     # mô tả repo secrets (token thật không nằm ở đ�
 | `OneDrive token hết hạn` | `/settings` → OneDrive → **Đăng nhập tự động** lại, hoặc dán token mới |
 | `Google Drive token hết hạn/thu hồi` | `/gdrive` → xóa tài khoản lỗi → **🔗 Thêm tài khoản bằng link** (hoặc dán JSON `rclone authorize "drive"`) |
 | `The provided client secret is invalid` / `invalid_client` | Google đã ngừng client chung của rclone. `/gdrive` → **🔑 OAuth client riêng** → nhập Client ID + secret của Desktop app bạn tự tạo (xem 2.3), rồi thêm tài khoản lại. |
+| `Google Drive API từ chối token: HTTP 403` | Client rclone bị Google hạn chế, hoặc project của OAuth client chưa bật **Google Drive API**. Dùng **🔑 OAuth client riêng** và bật Drive API cho project đó (xem 2.3). |
 | `Không thấy backup trên Drive` | `/restore` quét cả hai cloud; kiểm tra `/gdrive → Kiểm tra` và đích backup ở `/backup` |
 | `Keepalive không chạy` | `/kalog` xem hostname/target có đúng Codespace không, bấm **Khởi động lại**; kiểm tra scope `codespace` + `admin:public_key` |
 | `/quota` báo thiếu số liệu | GitHub chỉ cập nhật mỗi giờ; bấm **Nhập số đã dùng** để nhập tay từ trang billing |

@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 
@@ -429,6 +430,27 @@ def gdrive_info(token_json_text):
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             d = json.loads(resp.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        detail = ''
+        try:
+            raw = e.read().decode('utf-8', 'replace')
+            obj = json.loads(raw)
+            err = obj.get('error') or {}
+            detail = str(err.get('message') or obj.get('error_description') or '').strip()
+            reason = ((err.get('errors') or [{}])[0].get('reason') or '')
+            if reason and reason not in detail:
+                detail = f'{detail} ({reason})' if detail else reason
+        except Exception:  # noqa
+            detail = ''
+        msg = f'HTTP {e.code}' + (f': {detail[:300]}' if detail else '')
+        if e.code == 403:
+            msg += ('\n→ Client OAuth đang dùng bị Google hạn chế hoặc project chưa bật '
+                    'Google Drive API. Vào /gdrive → 🔑 OAuth client riêng (project của bạn '
+                    'đã bật Drive API), rồi thêm tài khoản lại.')
+        has_refresh = bool(tok.get('refresh_token'))
+        extra = '' if has_refresh else \
+            ' (token thiếu refresh_token nên rclone sẽ hết hạn sau ~1 giờ)'
+        return None, msg + extra
     except Exception as e:  # noqa
         has_refresh = bool(tok.get('refresh_token'))
         extra = '' if has_refresh else \

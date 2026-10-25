@@ -559,8 +559,9 @@ def gdrive_client_text(cfg):
                      + ('đã lưu ✅' if cfg.get('gdrive_client_secret') else 'chưa có ❌'))
     else:
         lines.append('• Đang dùng client mặc định của rclone ⚠️')
-        lines.append('• Google đang ngừng client này trong 2026. Nếu khi thêm tài khoản bot báo '
-                     '<i>The provided client secret is invalid</i> thì cần client riêng.')
+        lines.append('• Google đang ngừng client này trong 2026. Nếu bot báo '
+                     '<i>client secret is invalid</i> hoặc <i>HTTP 403 Forbidden</i> khi thêm '
+                     'tài khoản thì cần client riêng.')
     lines += ['', '📋 <b>Tạo OAuth client riêng (miễn phí, ~5 phút)</b>',
               '1. Mở <a href="https://console.cloud.google.com/apis/credentials">Google Cloud '
               'Console → Credentials</a>.',

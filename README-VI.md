@@ -55,9 +55,9 @@ Colab sau tự khôi phục.
   Không có PAT, bot sẽ mời đăng nhập GitHub bằng mã thiết bị ngay trong Colab.
 - Google Drive gộp nhiều tài khoản giúp tăng **tổng dung lượng**, nhưng mỗi file nằm
   trọn trên một tài khoản và không tăng tốc độ tải.
-- Nếu thêm Google Drive báo `The provided client secret is invalid`, Google đã ngừng client
-  chung của rclone: `/gdrive` → **🔑 OAuth client riêng** để dùng OAuth client Desktop app
-  của bạn (chi tiết ở README.md mục 2.3).
+- Nếu thêm Google Drive báo `The provided client secret is invalid` hoặc `HTTP 403`, Google đã
+  ngừng/hạn chế client chung của rclone: `/gdrive` → **🔑 OAuth client riêng** để dùng OAuth
+  client Desktop app của bạn (chi tiết ở README.md mục 2.3).
 - Repo secrets phải **private**; không commit token vào repo code public.
 - Cần Python 3.10+, `git`, `gh`, `ssh` — `colab.py` tự cài `gh` nếu thiếu.
 
