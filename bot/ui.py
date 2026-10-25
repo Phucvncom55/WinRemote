@@ -3,7 +3,7 @@
 import datetime
 
 from bot.tg import kb
-from bot.util import esc, fmt_bytes, vn_time
+from bot.util import esc, fmt_bytes, fmt_elapsed, vn_time
 
 DISCLAIMER = ('⚠️ <i>Lưu ý: chạy VM liên tục trong GitHub Codespaces có thể không đúng '
               'mục đích sử dụng của GitHub — tài khoản có nguy cơ bị hạn chế.</i>')
@@ -553,18 +553,23 @@ def keepalive_text(cfg, snap, page=0, quota=None, cs_state=None):
         if cs and not (cs in host or host in cs):
             lines.append('　└ ℹ️ Hostname Codespace thường có thêm hậu tố — kiểm tra dòng '
                          '<code>KA_HOST</code> trong log bên dưới.')
+    pid = snap.get('pid') or 0
     since = snap.get('since') or 0
+    live = bool(pid) and str(snap.get('state') or '') in ('running', 'đang kết nối…')
     try:
-        session_sec = int(max(0, datetime.datetime.now().timestamp() - float(since))) if since else 0
+        if live and since:
+            session_sec = int(max(0, datetime.datetime.now().timestamp() - float(since)))
+        else:
+            session_sec = int(snap.get('last_session_sec') or 0)
     except (TypeError, ValueError):
         session_sec = 0
+    sess_label = 'Phiên hiện tại' if live else 'Phiên gần nhất'
     beats = snap.get('beats') or 0
     attempts = snap.get('attempts') or 0
     lines.append(f"• Output cuối: {_age_txt(snap.get('last_output_ts'))}"
-                 f" • Phiên hiện tại: {session_sec}s")
-    pid = snap.get('pid') or 0
+                 f" • {sess_label}: {session_sec}s ({fmt_elapsed(session_sec)})")
     lines.append(f"• pid {pid if pid else '—'}"
-                 f" • restart {snap.get('restarts') or 0}"
+                 f" • restart {snap.get('manual_restarts') or 0}"
                  f" • kết nối lại {max(0, int(attempts) - 1)}"
                  f" • {total} dòng log")
     if beats:

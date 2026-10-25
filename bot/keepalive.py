@@ -40,6 +40,9 @@ class Keepalive:
         self.remote_host = ''
         self.command = ''
         self.restarts = 0
+        self.manual_restarts = 0
+        self.ended_ts = 0.0
+        self.last_session_sec = 0
         self.beats = 0
         self.attempts = 0
         self.last_rc = None
@@ -132,6 +135,7 @@ class Keepalive:
 
     def restart(self):
         """Buộc mở lại phiên SSH (dùng sau khi đổi Codespace / sửa lỗi)."""
+        self.manual_restarts += 1
         self._log('keepalive: yêu cầu mở lại phiên SSH')
         self._kill_proc()
         self._wake.set()
@@ -153,7 +157,9 @@ class Keepalive:
     def snapshot(self):
         with self.lock:
             return {'state': self.state, 'last_line': self.last_line,
-                    'restarts': self.restarts, 'since': self.started_ts,
+                    'restarts': self.restarts, 'manual_restarts': self.manual_restarts,
+                    'since': self.started_ts, 'ended_ts': self.ended_ts,
+                    'last_session_sec': self.last_session_sec,
                     'connected_at': self.connected_ts,
                     'target': self.target, 'host': self.remote_host,
                     'command': self.command, 'beats': self.beats,
@@ -245,6 +251,8 @@ class Keepalive:
             self.state = 'đang kết nối…'
             self.started_ts = now
             self.connected_ts = 0.0
+            self.ended_ts = 0.0
+            self.last_session_sec = 0
             self.target = name
             self.remote_host = ''
             self.beats = 0
@@ -314,11 +322,13 @@ class Keepalive:
             rc = p.returncode
         except Exception:
             rc = None
+        elapsed = time.time() - self.connected_ts if self.connected_ts else 0
         with self.lock:
             if self.proc is p:
                 self.proc = None
             self.last_rc = rc
-        elapsed = time.time() - self.connected_ts if self.connected_ts else 0
+            self.ended_ts = time.time()
+            self.last_session_sec = int(elapsed) if elapsed else 0
         msg = f'keepalive: phiên SSH kết thúc ({exit_reason}, rc={rc}) sau {int(elapsed)}s'
         self._log(msg)
 

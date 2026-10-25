@@ -330,14 +330,17 @@ class Engine:
                 detail = {'_error': str(e)}
         machine = (detail or {}).get('machine') or {}
         cores = self._int_safe(machine.get('cpus'))
-        ram = self._int_safe(machine.get('memory_in_bytes')) // (1024 ** 3)
-        disk = self._int_safe(machine.get('storage_in_bytes')) // (1024 ** 3)
+        ram = int(round(self._int_safe(machine.get('memory_in_bytes')) / float(1024 ** 3)))
+        disk = int(round(self._int_safe(machine.get('storage_in_bytes')) / float(1024 ** 3)))
+        # Fallback phải theo MÁY CODESPACE, không phải ổ ảo của Windows VM
+        # (vm.disk_gb thường 450 GB -> sẽ tính sai hạn mức lưu trữ 32 GB).
         if not cores:
-            cores = self._int_safe(self.cfg.vm().get('cores'), 4)
+            cores = 4
         if not ram:
-            ram = self._int_safe(self.cfg.vm().get('ram_gb'), 16)
+            ram = 16
         if not disk:
-            disk = self._int_safe(self.cfg.vm().get('disk_gb'), 32)
+            mm = re.search(r'(\d+)\s*gb', str(self.cfg.get('cs_machine') or '').lower())
+            disk = int(mm.group(1)) if mm else 32
         q.update({'cores': cores, 'ram_gb': ram, 'disk_gb': disk,
                   'machine': str(machine.get('name') or machine.get('display_name') or cs)})
 

@@ -526,6 +526,16 @@ def test_keepalive_inline_log_and_stop():
         env.cb('ka:p:1', mid=970)
         e2 = env.wait('trang 2/', since=n)
         assert 'KA_BEAT' in e2['text']
+        # Phiên đã kết thúc: thời lượng phải đứng yên (không tăng thành 89614s)
+        env.eng.ka = FakeKeepalive({
+            'state': 'off', 'target': 'winvm-cs', 'pid': 0, 'attempts': 8,
+            'manual_restarts': 1, 'since': time.time() - 100000,
+            'last_session_sec': 5184, 'lines': ['phiên cũ'],
+        })
+        n2 = len(env.events())
+        env.send('/kalog')
+        e3 = env.wait('Phiên gần nhất: 5184s', since=n2)
+        assert 'restart 1' in e3['text'], e3['text']
         # Nút dừng Codespace
         env.cb('ka:stop', mid=971)
         env.wait('Đã dừng Codespace', timeout=20, since=n)
@@ -544,6 +554,12 @@ def test_quota_flow():
         assert '28 giờ' in e['text']
         assert '0.15 / 15' in e['text']
         assert 'vCPU' in e['text']
+        # detail lỗi -> vẫn dùng ổ 32 GB của machine Codespace, không lấy 450 GB của VM
+        env.gh.codespace_detail = lambda name: {}
+        n = len(env.events())
+        env.send('/quota')
+        e_fb = env.wait('ổ đĩa 32 GB', timeout=20, since=n)
+        assert '450 GB' not in e_fb['text']
         # billing bị chặn: hiện cảnh báo + cho phép nhập tay
         env.gh.billing_denied = True
         env.cfg.set('quota_cache_sec', 30)
