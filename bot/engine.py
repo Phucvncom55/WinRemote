@@ -429,14 +429,33 @@ class Engine:
     def cmd_kalog(self, chat_id, args):
         self.show_keepalive(chat_id)
 
-    def show_keepalive(self, chat_id, mid=None):
+    def show_keepalive(self, chat_id, mid=None, page=0, prefix=''):
         snap = self.ka.snapshot() if self.ka else {}
-        text = ui.keepalive_text(self.cfg, snap)
-        k = ui.keepalive_kb(self.cfg)
+        # Dùng log trên file (nếu có) để xem được cả log cũ sau khi bot restart.
+        if self.ka and hasattr(self.ka, 'log_lines'):
+            try:
+                snap = dict(snap)
+                snap['log_lines'] = self.ka.log_lines()
+            except Exception:
+                pass
+        cs_state = None
+        if self.cfg.has_codespace:
+            try:
+                cs_state = self.remote.state()
+            except Exception:
+                cs_state = None
+        quota = self._quota_cache[1]
+        text = ui.keepalive_text(self.cfg, snap, page=page, quota=quota, cs_state=cs_state)
+        raw = list(snap.get('log_lines') or snap.get('lines') or [])
+        _, page, pages, _ = ui.keepalive_log_slice(raw, page)
+        k = ui.keepalive_kb(self.cfg, page=page, pages=pages, cs_state=cs_state)
+        if prefix:
+            text = prefix + '\n\n' + text
         if mid:
             self.tg.edit_message(chat_id, mid, text, buttons=k)
         else:
             self.tg.send_message(chat_id, text, buttons=k)
+        return page
 
     def cmd_onedrive(self, chat_id, args):
         if args.strip():
@@ -1023,8 +1042,15 @@ class Engine:
 
     def _cb_keepalive(self, chat_id, mid, p):
         act = p[1] if len(p) > 1 else 'log'
-        if act in ('log', 'r'):
+        if act in ('log', 'r', 'file'):
+            # 'file' là callback cũ: giờ hiển thị log inline, KHÔNG gửi file nữa.
             self.show_keepalive(chat_id, mid=mid)
+        elif act == 'p':
+            try:
+                page = int(p[2]) if len(p) > 2 else 0
+            except (TypeError, ValueError):
+                page = 0
+            self.show_keepalive(chat_id, mid=mid, page=page)
         elif act == 'restart':
             msg = '♻️ Đã yêu cầu mở lại phiên SSH keepalive.'
             if self.ka and hasattr(self.ka, 'restart'):
@@ -1034,27 +1060,11 @@ class Engine:
                     msg = '⚠️ Không mở lại được: ' + esc(str(e)[:150])
             else:
                 msg = '⚠️ Keepalive chưa chạy trong tiến trình bot.'
-            snap = self.ka.snapshot() if self.ka else {}
-            text = ui.keepalive_text(self.cfg, snap)
-            if msg:
-                text = msg + '\n\n' + text
-            self.tg.edit_message(chat_id, mid, text, buttons=ui.keepalive_kb(self.cfg))
-        elif act == 'file':
-            data = ''
-            if self.ka and hasattr(self.ka, 'read_logfile'):
-                try:
-                    data = self.ka.read_logfile() or ''
-                except Exception:
-                    data = ''
-            snap = self.ka.snapshot() if self.ka else {}
-            if not data:
-                snap_lines = '\n'.join([str(x) for x in (snap.get('lines') or [])])
-                data = snap_lines or 'Chưa có log keepalive.'
-            self.tg.send_document(
-                chat_id, 'keepalive.log', data.encode('utf-8', 'replace'),
-                caption=(f"📄 Log keepalive — đích: {snap.get('target') or '(chưa có)'}"
-                         f" • nhịp tim: {snap.get('beats') or 0}"))
-            self.show_keepalive(chat_id)
+            self.show_keepalive(chat_id, mid=mid, prefix=msg)
+        elif act == 'stop':
+            self.start_job('Dừng Codespace', chat_id, self.worker_cs_stop)
+        elif act == 'start':
+            self.start_job('Bật Codespace', chat_id, self.worker_cs_start)
         elif act == 'test':
             self.start_job('Test keepalive', chat_id, self.worker_ka_test)
         elif act == 'clear':
@@ -1409,7 +1419,11 @@ class Engine:
         r = self.gh.codespace_stop(self.cfg.get('codespace') or '')
         if not r.ok:
             raise JobError('Không dừng được Codespace: ' + esc((r.err or r.out)[-300:]))
-        ctx.edit('✅ Đã gửi lệnh dừng Codespace.', force=True)
+        ctx.edit('✅ Đã dừng Codespace.\n'
+                 '　└ Keepalive tự tạm nghỉ khi máy không Available; bật lại máy là tự chạy tiếp.\n'
+                 '　└ Dừng máy giúp không tốn giờ nhân lõi (vCPU).',
+                 buttons=kb([[('📜 Log keepalive', 'ka:log'), ('🏠 Trang chính', 'home')]]),
+                 force=True)
 
     # ================= worker: tạo codespace =================
     def worker_cs_create(self, ctx):

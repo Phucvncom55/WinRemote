@@ -185,7 +185,7 @@ Mỗi lần đổi setting, bot tự đẩy `bot-config.json` lên repo secrets.
 | `/ssh <lệnh>` | Chạy bash trong Codespace; output dài gửi kèm file `.txt` |
 | `/cleanup` | Xóa parts/archive/log tạm trên Codespace |
 | `/actions` | Mở Windows tạm trên GitHub Actions (~6 giờ), RDP qua Tailscale; chọn runner **windows-2025** hoặc **windows-2022** |
-| `/kalog` | Log keepalive: đúng Codespace chưa, hostname trong phiên SSH, nhịp tim, lỗi gần nhất, nút gửi full log |
+| `/kalog` | Log keepalive hiển thị **ngay trong chat** (phân trang ◀️/▶️, không tải file): đúng Codespace chưa, hostname, nhịp tim, lỗi gần nhất; có nút **⏹ Dừng / ▶️ Bật Codespace** |
 | `/ports` | Mở public cổng 8006/3389 |
 | `/settings` | Token, Codespace, keepalive, cấu hình VM |
 | `/cancel` | Hủy job đang chạy (an toàn ở ranh giới bước) |

@@ -502,6 +502,38 @@ def test_settings_flows():
         env.cleanup()
 
 
+def test_keepalive_inline_log_and_stop():
+    env = Env()
+    try:
+        env.configure()
+        from bot.keepalive import FakeKeepalive
+        lines = ['2026-10-24 03:%02d:00 ssh> KA_BEAT test' % (i % 60) for i in range(40)]
+        env.eng.ka = FakeKeepalive({
+            'state': 'running', 'target': 'winvm-cs', 'pid': 4321,
+            'attempts': 8, 'restarts': 7, 'since': time.time() - 100,
+            'beats': 5, 'last_output_ts': time.time() - 10,
+            'lines': lines,
+        })
+        n = len(env.events())
+        env.send('/kalog')
+        e = env.wait('LOG KEEPALIVE', since=n)
+        assert 'trang 1/' in e['text'], e['text']
+        assert '40 dòng log' in e['text'], e['text']
+        assert 'ka:stop' in json.dumps(e.get('buttons'), ensure_ascii=False)
+        # Log hiển thị inline, không gửi file .log
+        assert not any(x.get('kind') == 'doc' for x in env.events()[n:])
+        # Phân trang xem log cũ hơn ngay trong chat
+        env.cb('ka:p:1', mid=970)
+        e2 = env.wait('trang 2/', since=n)
+        assert 'KA_BEAT' in e2['text']
+        # Nút dừng Codespace
+        env.cb('ka:stop', mid=971)
+        env.wait('Đã dừng Codespace', timeout=20, since=n)
+        assert env.gh.codespace_state('winvm-cs') == 'Shutdown'
+    finally:
+        env.cleanup()
+
+
 def test_quota_flow():
     env = Env()
     try:
@@ -1007,6 +1039,7 @@ TESTS = [
     test_onedrive_auto_login,
     test_repo_flow,
     test_keepalive_log_view,
+    test_keepalive_inline_log_and_stop,
     test_quota_flow,
     test_backup_flow,
     test_backup_cancel,

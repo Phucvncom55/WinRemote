@@ -45,7 +45,7 @@ class Keepalive:
         self.last_rc = None
         self.last_error = ''
         self.retry_at = 0.0
-        self.lines = collections.deque(maxlen=300)
+        self.lines = collections.deque(maxlen=500)
         self._wake = threading.Event()
         self.t = threading.Thread(target=self._loop, name='keepalive', daemon=True)
 
@@ -101,6 +101,22 @@ class Keepalive:
         except OSError:
             return ''
         return data[-max_bytes:]
+
+    def log_lines(self):
+        """Toàn bộ log dạng dòng — ưu tiên file để không mất log sau khi bot restart.
+
+        Dùng cho màn hình log inline trong Telegram (không gửi file).
+        """
+        if self.log_path:
+            try:
+                with open(self.log_path, 'r', encoding='utf-8', errors='replace') as f:
+                    out = f.read().splitlines()
+                if out:
+                    return out
+            except OSError:
+                pass
+        with self.lock:
+            return list(self.lines)
 
     # ---------- vòng đời ----------
     def start(self):
@@ -383,3 +399,6 @@ class FakeKeepalive:
 
     def read_logfile(self, max_bytes=180000):
         return ''
+
+    def log_lines(self):
+        return list(self.snap.get('lines') or [])

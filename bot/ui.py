@@ -487,15 +487,63 @@ def _since_txt(ts):
     return f'{d // 3600}h{(d % 3600) // 60:02d}m'
 
 
-def keepalive_text(cfg, snap):
+KA_LOG_PER_PAGE = 16
+KA_LOG_LINE_CHARS = 150
+
+
+def _age_txt(ts):
+    """Tuổi của một mốc thời gian: '1407 phút trước (84429s)'."""
+    if not ts:
+        return 'chưa có'
+    try:
+        d = int(max(0, datetime.datetime.now().timestamp() - float(ts)))
+    except (TypeError, ValueError):
+        return 'chưa rõ'
+    if d < 60:
+        label = f'{d} giây'
+    elif d < 3600:
+        label = f'{d // 60} phút'
+    else:
+        label = f'{d // 3600} giờ {(d % 3600) // 60:02d} phút'
+    return f'{label} trước ({d}s)'
+
+
+def keepalive_log_slice(raw, page=0, per_page=KA_LOG_PER_PAGE):
+    """Cắt log thành trang (trang 0 = mới nhất).
+
+    Trả (các dòng của trang, trang đã kẹp, tổng số trang, tổng số dòng).
+    """
+    raw = [str(x) for x in (raw or [])]
+    total = len(raw)
+    pages = max(1, (total + per_page - 1) // per_page)
+    try:
+        page = int(page or 0)
+    except (TypeError, ValueError):
+        page = 0
+    page = min(max(0, page), pages - 1)
+    end = total - page * per_page
+    start = max(0, end - per_page)
+    return raw[start:end], page, pages, total
+
+
+def keepalive_text(cfg, snap, page=0, quota=None, cs_state=None):
     snap = snap or {}
+    raw = list(snap.get('log_lines') or snap.get('lines') or [])
+    chunk, page, pages, total = keepalive_log_slice(raw, page)
     lines = ['🔄 <b>KEEPALIVE — NHẬT KÝ & CHẨN ĐOÁN</b>', '']
-    lines.append(f"• Trạng thái: <b>{esc(snap.get('state') or 'off')}</b>")
-    lines.append(f"• Bật/tắt: {'BẬT 🟢' if cfg.get('keepalive_enabled') else 'TẮT ⚪'}"
+    enabled = bool(cfg.get('keepalive_enabled'))
+    lines.append(f"• Trạng thái: <b>{esc(snap.get('state') or 'off')}</b>"
+                 f" • keepalive: {'BẬT 🟢' if enabled else 'TẮT ⚪'}"
                  f" • chu kỳ {cfg.get('keepalive_interval')}s")
-    target = snap.get('target') or cfg.get('codespace') or '(chưa có)'
-    lines.append(f"• Codespace đích: <code>{esc(target)}</code>")
     cs = cfg.get('codespace') or ''
+    if cs_state:
+        lines.append(f"• Codespace: <code>{esc(cs)}</code> — "
+                     f"<b>{esc(CS_STATE_VN.get(cs_state, cs_state))}</b>")
+    target = snap.get('target') or cs or '(chưa có)'
+    if snap.get('pid'):
+        lines.append(f"• Codespace đích: <code>{esc(target)}</code> — đang mở phiên SSH")
+    else:
+        lines.append(f"• Codespace đích: <code>{esc(target)}</code> — chưa mở phiên SSH")
     if cs and target and cs != target:
         lines.append('　└ ⚠️ KHÁC codespace đang chọn — bấm <b>Mở lại phiên</b> để trỏ đúng.')
     host = snap.get('host') or ''
@@ -505,44 +553,83 @@ def keepalive_text(cfg, snap):
         if cs and not (cs in host or host in cs):
             lines.append('　└ ℹ️ Hostname Codespace thường có thêm hậu tố — kiểm tra dòng '
                          '<code>KA_HOST</code> trong log bên dưới.')
+    since = snap.get('since') or 0
+    try:
+        session_sec = int(max(0, datetime.datetime.now().timestamp() - float(since))) if since else 0
+    except (TypeError, ValueError):
+        session_sec = 0
+    beats = snap.get('beats') or 0
+    attempts = snap.get('attempts') or 0
+    lines.append(f"• Output cuối: {_age_txt(snap.get('last_output_ts'))}"
+                 f" • Phiên hiện tại: {session_sec}s")
     pid = snap.get('pid') or 0
-    lines.append(f"• Tiến trình SSH: {'pid ' + str(pid) if pid else 'chưa chạy'}"
-                 f" • đã chạy {_since_txt(snap.get('since'))}")
-    if snap.get('connected_at'):
-        lines.append(f"• Kết nối ổn định: {_since_txt(snap.get('connected_at'))}"
-                     f" • nhịp tim: <b>{snap.get('beats') or 0}</b>")
-    lines.append(f"• Dòng cuối: <code>{esc(str(snap.get('last_line') or '—')[:120])}</code>")
-    if snap.get('last_output_ts'):
-        lines.append(f"• Nhận log cách đây: {_since_txt(snap.get('last_output_ts'))}")
+    lines.append(f"• pid {pid if pid else '—'}"
+                 f" • restart {snap.get('restarts') or 0}"
+                 f" • kết nối lại {max(0, int(attempts) - 1)}"
+                 f" • {total} dòng log")
+    if beats:
+        lines.append(f"• Nhịp tim: <b>{beats}</b>")
+    if snap.get('last_line'):
+        lines.append(f"• Dòng cuối: <code>{esc(str(snap.get('last_line'))[:120])}</code>")
     if snap.get('last_rc') is not None:
         lines.append(f"• Mã thoát SSH gần nhất: <code>{esc(snap.get('last_rc'))}</code>")
-    if snap.get('command'):
-        lines.append(f"• Lệnh: <code>{esc(str(snap.get('command'))[:180])}</code>")
     if snap.get('last_error'):
-        lines.append(f"• ⚠️ Lỗi gần nhất: {esc(str(snap.get('last_error'))[:220])}")
-    raw = list(snap.get('lines') or [])
+        lines.append(f"• Lỗi cuối: {esc(str(snap.get('last_error'))[:220])}")
+    else:
+        lines.append('• Lỗi cuối: —')
+    if snap.get('command'):
+        lines.append(f"• Lệnh: <code>{esc(str(snap.get('command'))[:160])}</code>")
+    if quota:
+        qb = quota_brief(quota)
+        if qb:
+            lines.append(qb)
     lines.append('')
-    lines.append('📜 <b>Log gần nhất</b> (bot ↔ SSH):')
-    if raw:
-        tail = [str(x)[:180] for x in raw[-14:]]
-        lines.append('<pre>' + esc('\n'.join(tail)) + '</pre>')
+    lines.append(f"📜 <b>LOG KEEPALIVE</b> • trang {page + 1}/{pages} • {total} dòng")
+    if chunk:
+        shown = [str(x)[:KA_LOG_LINE_CHARS] for x in chunk]
+        lines.append('<pre>' + esc('\n'.join(shown)) + '</pre>')
+        if pages > 1:
+            lines.append(f'<i>Trang {page + 1}/{pages} — dùng nút ◀️/▶️ để xem toàn bộ log '
+                         'ngay trong chat (không cần tải file).</i>')
     else:
         lines.append('<i>Chưa có log — keepalive chưa kết nối SSH lần nào. '
                      'Bấm "Test keepalive" để kiểm tra ngay.</i>')
     lines.append('')
-    lines.append('💡 "Test keepalive" mở một phiên SSH mới tới đúng Codespace đang chọn, '
-                 'in hostname + giờ máy để xác nhận. "Tải log đầy đủ" gửi file log của bot.')
+    lines.append('💡 "Test keepalive" mở một phiên SSH mới tới đúng Codespace đang chọn. '
+                 '"Dừng Codespace" tắt máy đang chạy — keepalive tự tạm nghỉ, '
+                 'bật lại máy là tự chạy tiếp.')
     return '\n'.join(lines)
 
 
-def keepalive_kb(cfg):
+def keepalive_kb(cfg, page=0, pages=1, cs_state=None):
     ka = 'TẮT' if cfg.get('keepalive_enabled') else 'BẬT'
-    return kb([
+    rows = [
         [('🔁 Làm mới log', 'ka:log'), ('🧪 Test keepalive', 'ka:test')],
-        [('♻️ Mở lại phiên SSH', 'ka:restart'), ('📄 Tải log đầy đủ', 'ka:file')],
-        [(f"🔄 {ka} keepalive", 'set:ka'), ('🗑 Xóa log', 'ka:clear')],
-        [('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')],
-    ])
+        [('♻️ Mở lại phiên SSH', 'ka:restart')],
+    ]
+    if cfg.has_codespace:
+        if cs_state == 'Available':
+            rows[-1].append(('⏹ Dừng Codespace', 'ka:stop'))
+        elif cs_state in ('Shutdown', 'Stopped'):
+            rows[-1].append(('▶️ Bật Codespace', 'ka:start'))
+        else:
+            rows.append([('⏹ Dừng Codespace', 'ka:stop'),
+                         ('▶️ Bật Codespace', 'ka:start')])
+    rows.append([(f"🔄 {ka} keepalive", 'set:ka'), ('🗑 Xóa log', 'ka:clear')])
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(('⏪ Mới nhất', 'ka:p:0'))
+            nav.append(('▶️ Mới hơn', f'ka:p:{page - 1}'))
+        if page < pages - 1:
+            nav.append(('◀️ Cũ hơn', f'ka:p:{page + 1}'))
+            nav.append(('⏩ Cũ nhất', f'ka:p:{pages - 1}'))
+        if nav:
+            rows.append(nav)
+    rows.append([('📊 Hạn mức', 'q:show'), ('⚙️ Cài đặt', 'set:menu'),
+                 ('🏠 Trang chính', 'home')])
+    return kb(rows)
+
 
 
 def keepalive_test_text(cfg, snap, res):
@@ -584,7 +671,7 @@ def keepalive_test_text(cfg, snap, res):
 def keepalive_test_kb():
     return kb([
         [('📜 Log keepalive', 'ka:log'), ('🧪 Test lại', 'ka:test')],
-        [('📄 Tải log đầy đủ', 'ka:file'), ('⚙️ Cài đặt', 'set:menu')],
+        [('📊 Hạn mức', 'q:show'), ('⚙️ Cài đặt', 'set:menu')],
         [('🏠 Trang chính', 'home')],
     ])
 
