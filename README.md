@@ -139,7 +139,14 @@ Lệnh này tự clone/cập nhật code rồi gọi `run.sh`. `run.sh` tìm tok
 1. Biến `TELEGRAM_BOT_TOKEN`
 2. File `secrets/token.txt` trong repo (nếu có)
 3. Repo private `Phucvncom55/WinRemote-secrets`, xác thực bằng `WM_GITHUB_TOKEN`,
-   `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token` hoặc Colab Secret `WM_GITHUB_TOKEN`
+   `GH_TOKEN`, `GITHUB_TOKEN`, `gh auth token` hoặc Colab Secret (một trong ba tên
+   `WM_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`)
+
+Nếu không tìm được PAT nào, `colab.py` tự mời đăng nhập GitHub CLI bằng mã thiết bị
+(device code): nó in `XXXX-XXXX` và link `github.com/login/device`, bạn nhập mã rồi
+Authorize — bot đọc repo secrets và chạy tiếp. Cách này **không cần tạo PAT**, nhưng
+phải làm lại mỗi lần Colab cấp runtime mới (khoảng 12 giờ). Muốn khỏi lặp lại, hãy tạo
+PAT chỉ-đọc và lưu vào Colab Secrets như trên.
 
 Nếu repo code để **private**, thêm `WINREMOTE_REPO='Phucvncom55/WinRemote'` và cấp PAT
 quyền đọc repo code.
@@ -345,7 +352,8 @@ secrets/README.md     # mô tả repo secrets (token thật không nằm ở đ�
 
 | Hiện tượng | Cách xử lý |
 |---|---|
-| `Không đọc được token bot từ repo bí mật` / `repo private và chưa có WM_GITHUB_TOKEN` | Repo `WinRemote-secrets` là private nên phải truyền PAT chỉ-đọc khi chạy one-liner: `WM_GITHUB_TOKEN='github_pat_...' bash <(curl ...)`. Fine-grained PAT phải chọn **đúng repo** `WinRemote-secrets` + quyền **Contents: Read-only**. Nếu lưu trong Colab Secrets: mở 🔑 → bật **Notebook access** cho `WM_GITHUB_TOKEN`. |
+| `Không đọc được token bot từ repo bí mật` / `repo private và chưa có WM_GITHUB_TOKEN` | Repo `WinRemote-secrets` là private nên phải truyền PAT chỉ-đọc khi chạy one-liner: `WM_GITHUB_TOKEN='github_pat_...' bash <(curl ...)`. Fine-grained PAT phải chọn **đúng repo** `WinRemote-secrets` + quyền **Contents: Read-only**. Nếu lưu trong Colab Secrets: mở 🔑 → bật **Notebook access** cho `WM_GITHUB_TOKEN` (hoặc `GITHUB_TOKEN`/`GH_TOKEN`). Không có PAT, `colab.py` sẽ mời đăng nhập GitHub bằng mã thiết bị. |
+| `Đăng nhập GitHub CLI chưa xong` | Mã thiết bị đã hết hạn hoặc Colab chặn luồng tương tác — chạy lại cell, nhập mã mới trong 15 phút; hoặc dùng PAT chỉ-đọc. |
 | `token.txt không giống token bot` | File chỉ nên chứa token dạng `123456:ABC…` (hoặc một dòng `TELEGRAM_BOT_TOKEN=…`), không thêm ngoặc kép, khoảng trắng hay ghi chú. |
 | `PAT không hợp lệ hoặc đã hết hạn (HTTP 401)` | Tạo PAT mới (7–90 ngày) rồi chạy lại one-liner với PAT đó. |
 | `Không thấy .../token.txt (HTTP 404)` | PAT fine-grained chưa được cấp quyền repo đó, hoặc file chưa commit lên nhánh `main`. |

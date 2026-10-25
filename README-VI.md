@@ -26,6 +26,11 @@ trong Colab Secrets với tên `WM_GITHUB_TOKEN`, có thể dùng lệnh gọn:
 Lệnh tự clone/cập nhật code, tải `token.txt` từ repo secrets, khôi phục
 `bot-config.json` nếu có, rồi chạy bot long-poll. Không hỏi gì trên terminal.
 
+Nếu chưa có PAT ở đâu, `colab.py` tự mời đăng nhập GitHub bằng **mã thiết bị**: in
+`XXXX-XXXX` + link `github.com/login/device`, bạn nhập mã, Authorize, bot chạy tiếp.
+Không cần tạo PAT, nhưng phải làm lại mỗi lần Colab cấp runtime mới; lưu PAT chỉ-đọc
+vào Colab Secrets (`WM_GITHUB_TOKEN`, `GITHUB_TOKEN` hoặc `GH_TOKEN`) thì khỏi lặp lại.
+
 ## Sau khi bot chạy
 
 1. `/start` — chat đầu tiên nhận quyền owner.
@@ -47,6 +52,7 @@ Colab sau tự khôi phục.
 - Nếu bootstrap báo **không đọc được token bot**: repo secrets là private nên phải truyền
   PAT chỉ-đọc (`WM_GITHUB_TOKEN='github_pat_...'`) hoặc bật **Notebook access** cho Colab
   Secret cùng tên; PAT phải được cấp đúng repo `WinRemote-secrets` + `Contents: Read-only`.
+  Không có PAT, bot sẽ mời đăng nhập GitHub bằng mã thiết bị ngay trong Colab.
 - Google Drive gộp nhiều tài khoản giúp tăng **tổng dung lượng**, nhưng mỗi file nằm
   trọn trên một tài khoản và không tăng tốc độ tải.
 - Repo secrets phải **private**; không commit token vào repo code public.

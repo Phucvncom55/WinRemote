@@ -49,11 +49,22 @@ if [[ -z "${WM_GITHUB_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
   [[ -n "$value" ]] && export WM_GITHUB_TOKEN="$value"
 fi
 if [[ -z "${WM_GITHUB_TOKEN:-}" && -d /content ]]; then
-  value="$("$PY" -c 'from google.colab import userdata; print(userdata.get("WM_GITHUB_TOKEN") or "", end="")' 2>/dev/null || true)"
-  if [[ -n "$value" ]]; then
-    export WM_GITHUB_TOKEN="$value"
-  else
-    printf '\033[1;33m! Chưa đọc được Colab Secret WM_GITHUB_TOKEN (kiểm tra 🔑 → Notebook access) — sẽ thử đọc token.txt từ repo private.\033[0m\n' >&2
+  last_err=''
+  for secret in WM_GITHUB_TOKEN GITHUB_TOKEN GH_TOKEN; do
+    err_file="$(mktemp)"
+    value="$("$PY" -c 'import sys; from google.colab import userdata; print(userdata.get(sys.argv[1]) or "", end="")' "$secret" 2>"$err_file" || true)"
+    value="$(printf '%s' "$value" | tr -d '[:space:]')"
+    err="$(tr '\n' ' ' <"$err_file" 2>/dev/null | cut -c1-160 || true)"
+    rm -f "$err_file"
+    if [[ -n "$value" ]]; then
+      export WM_GITHUB_TOKEN="$value"
+      printf '\033[1;36m▸ Dùng PAT từ Colab Secret %s\033[0m\n' "$secret"
+      break
+    fi
+    [[ -n "$err" ]] && last_err="$err"
+  done
+  if [[ -z "${WM_GITHUB_TOKEN:-}" ]]; then
+    printf '\033[1;33m! Không đọc được Colab Secret (%s). Bật 🔑 → Notebook access, hoặc bot sẽ mời đăng nhập GitHub bằng mã.\033[0m\n' "${last_err:-chưa tạo secret}" >&2
   fi
 fi
 

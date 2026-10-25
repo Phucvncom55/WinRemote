@@ -146,6 +146,49 @@ def secrets_repo_name():
     return clean_repo(env('WM_SECRETS_REPO') or DEFAULT_SECRETS_REPO)
 
 
+def try_gh_login(gh):
+    """Colab thiếu PAT: đăng nhập gh bằng device code để đọc repo secrets.
+
+    Chỉ dùng khi chạy trên Colab (/content) và chưa có WM_GITHUB_TOKEN.
+    Token gh lấy được chỉ dùng trong tiến trình này, không in ra màn hình.
+    """
+    if not Path('/content').is_dir():
+        return ''
+    if not (gh and Path(gh).exists()):
+        return ''
+    say('')
+    say('  ⚠ Chưa có WM_GITHUB_TOKEN (PAT) để đọc repo secrets private.')
+    say('  → Đăng nhập GitHub ngay trong Colab, không cần tạo PAT:')
+    say('    1. Dòng tiếp theo in mã dạng XXXX-XXXX và link github.com/login/device')
+    say('    2. Mở link, nhập mã, bấm Authorize GitHub CLI')
+    say('    3. Quay lại Colab — bot tự chạy tiếp (mỗi phiên Colab một lần).')
+    cmd = [gh, 'auth', 'login', '--web', '--hostname', 'github.com',
+           '--git-protocol', 'https']
+    # BROWSER=echo để gh in URL thay vì đòi trình duyệt; tắt prompt để khỏi
+    # treo ở "Press Enter" khi Colab không cấp TTY cho cell.
+    env_extra = {'BROWSER': 'echo', 'GH_PROMPT_DISABLED': '1'}
+    try:
+        p = subprocess.run(cmd, stdin=subprocess.DEVNULL, timeout=600,
+                           env={**os.environ, **env_extra})
+    except subprocess.TimeoutExpired:
+        say('  ! Hết thời gian chờ đăng nhập GitHub.')
+        return ''
+    except Exception as e:  # noqa
+        say(f'  ! Không chạy được đăng nhập gh: {e}')
+        return ''
+    tok = ''
+    try:
+        tok = (run([gh, 'auth', 'token'], timeout=20).stdout or '').strip()
+    except Exception:  # noqa
+        tok = ''
+    if p.returncode == 0 and tok:
+        say('  ✓ Đã đăng nhập GitHub CLI — dùng token này đọc repo secrets.')
+        return tok
+    say('  ! Đăng nhập GitHub CLI chưa xong. Có thể nhập mã sai/hết hạn, hoặc Colab '
+        'không cho gh mở luồng tương tác.')
+    return ''
+
+
 def _arch_tag():
     m = platform.machine().lower()
     if m in ('x86_64', 'amd64'):
@@ -352,17 +395,22 @@ def main():
     except Exception as e:  # noqa
         say(f'  ! SSH: {e}')
 
-    if not env('WM_GITHUB_TOKEN'):
-        say('  ! Chưa có WM_GITHUB_TOKEN — không đọc được repo secrets private.')
-        if Path('/content').is_dir():
-            say('    Nếu đã lưu PAT ở Colab Secrets: mở 🔑 → bật "Notebook access" '
-                'cho WM_GITHUB_TOKEN, hoặc chạy lại kèm WM_GITHUB_TOKEN=\'github_pat_...\'.')
-
     try:
         token, source = fetch_token()
     except Exception as e:  # noqa
-        say(f'  ✗ {e}')
-        return 2
+        if env('WM_GITHUB_TOKEN') or args.check or not Path('/content').is_dir():
+            say(f'  ✗ {e}')
+            return 2
+        tok = try_gh_login(gh)
+        if not tok:
+            say(f'  ✗ {e}')
+            return 2
+        os.environ['WM_GITHUB_TOKEN'] = tok
+        try:
+            token, source = fetch_token()
+        except Exception as e2:  # noqa
+            say(f'  ✗ {e2}')
+            return 2
     say(f'  ✓ Token bot: lấy từ {source}')
     me, err = telegram_me(token)
     if me:

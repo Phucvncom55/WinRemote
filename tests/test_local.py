@@ -1103,6 +1103,31 @@ def test_colab_token_helpers():
             assert 'WinRemote-secrets' in str(e)
             assert 'WM_GITHUB_TOKEN' in str(e)
 
+    # Ngoài Colab: không mời đăng nhập, giữ nguyên lỗi thiếu PAT.
+    with mock.patch.object(colab.Path, 'is_dir', return_value=False):
+        assert colab.try_gh_login('/usr/bin/gh') == ''
+
+    # Colab: device login thành công -> trả token (không in ra), bật BROWSER=echo.
+    with mock.patch.object(colab.Path, 'is_dir', return_value=True), \
+            mock.patch.object(colab.Path, 'exists', return_value=True), \
+            mock.patch.object(colab.subprocess, 'run',
+                              return_value=mock.Mock(returncode=0)) as run_mock, \
+            mock.patch.object(colab, 'run',
+                              return_value=mock.Mock(stdout='gho_secret\n')):
+        assert colab.try_gh_login('/usr/bin/gh') == 'gho_secret'
+        cmd = run_mock.call_args[0][0]
+        assert cmd[1:3] == ['auth', 'login'] and '--web' in cmd
+        assert run_mock.call_args[1]['env']['BROWSER'] == 'echo'
+
+    # Colab: người dùng chưa nhập mã -> trả '' để main báo lỗi gốc.
+    with mock.patch.object(colab.Path, 'is_dir', return_value=True), \
+            mock.patch.object(colab.Path, 'exists', return_value=True), \
+            mock.patch.object(colab.subprocess, 'run',
+                              return_value=mock.Mock(returncode=1)), \
+            mock.patch.object(colab, 'run',
+                              return_value=mock.Mock(stdout='')):
+        assert colab.try_gh_login('/usr/bin/gh') == ''
+
 
 def test_keepalive_supervisor():
     """Keepalive thật sự mở phiên, đọc log và tự đổi khi cấu hình thay đổi."""
