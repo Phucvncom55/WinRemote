@@ -52,31 +52,44 @@ Chọn các scope:
 
 > Token này nhập qua `/settings` trong Telegram, **không** nằm trong code.
 
-### 2.2. OneDrive token (tự động)
+### 2.2. OneDrive token (bằng link + mã)
 
 Không cần trình duyệt trên server:
 
-1. `/settings` → **☁️ OneDrive** → **Đăng nhập tự động**.
+1. `/settings` → **☁️ OneDrive** → **🔗 Đăng nhập OneDrive (link + mã)**.
 2. Bot gửi link `microsoft.com/devicelogin` và mã 9 ký tự.
 3. Mở link trên điện thoại/máy tính, nhập mã, đăng nhập và bấm **Cho phép**.
 4. Bot tự poll, nhận `access_token` + `refresh_token`, kiểm tra dung lượng và lưu.
 
 Token có refresh token nên dùng lâu dài; bot tự làm mới khi gần hết hạn.
 Nếu muốn nhập tay, vẫn có thể chạy `rclone authorize onedrive` trên máy có trình duyệt
-rồi dán JSON vào `/settings`.
+rồi dán JSON vào `/settings` (nút **📋 Dán token JSON**).
 
-### 2.3. Google Drive token (tùy chọn — gộp nhiều tài khoản)
+### 2.3. Google Drive (tùy chọn — gộp nhiều tài khoản)
 
 Dùng khi muốn backup sang Google Drive, hoặc gộp nhiều tài khoản thành một ổ lớn
-(xem `/gdrive`):
+(xem `/gdrive`). Có hai cách thêm tài khoản:
+
+**Cách 1 — bằng link (khuyến nghị, không cần cài gì):**
+
+1. `/gdrive` → **🔗 Thêm tài khoản bằng link**.
+2. Bấm nút **Mở trang đăng nhập Google** → chọn tài khoản → **Cho phép / Allow**.
+3. Trình duyệt chuyển tới `http://127.0.0.1:53682/?code=…` và báo *không truy cập được*
+   — bình thường, bot không chạy web server trên máy bạn.
+4. Copy **toàn bộ địa chỉ** trên thanh địa chỉ (hoặc phần `code=…`) rồi dán lại vào chat.
+   Bot tự đổi mã thành token, kiểm tra dung lượng và lưu tài khoản.
+
+Làm lại bước 1–4 với từng tài khoản Google muốn gộp; bot tạo `gdrive1..N` và một remote
+union `gdrive:` với tổng dung lượng.
+
+**Cách 2 — dán JSON từ rclone (nâng cao):**
 
 ```bash
 rclone authorize "drive"
 ```
 
 Copy nguyên chuỗi JSON (`access_token` + `refresh_token`), rồi `/gdrive` →
-**➕ Thêm tài khoản** và dán vào. Làm lại với từng tài khoản Google muốn gộp;
-bot tạo `gdrive1..N` và một remote union `gdrive:` với tổng dung lượng.
+**📋 Dán token JSON** và dán vào.
 
 ### 2.4. Telegram bot token
 
@@ -178,7 +191,7 @@ Mỗi lần đổi setting, bot tự đẩy `bot-config.json` lên repo secrets.
 | `/quota` | Tổng thời gian Codespace còn dùng được (chạy + treo), ngày làm mới, nhập số đã dùng thủ công |
 | `/backup` | Dừng VM an toàn → nén zstd → chia 1 GB/part → upload (OneDrive/Google Drive) → kiểm tra → bật lại VM |
 | `/restore` | Quét **cả** OneDrive và Google Drive → chọn bản backup → tải → ghép → verify → giải nén vào `/mnt/data` |
-| `/gdrive` | Gộp nhiều tài khoản Google Drive thành một remote union `gdrive:`; thêm/xóa/kiểm tra/đổi đích backup |
+| `/gdrive` | Gộp nhiều tài khoản Google Drive thành một remote union `gdrive:`; thêm **bằng link** (hoặc dán JSON), xóa/kiểm tra/đổi đích backup |
 | `/repo` | Chọn hoặc tạo repo private `winvm-codespace` cho Codespace và Actions |
 | `/vm` | Bật/tắt/restart/tạo lại/xóa container; đổi CPU/RAM/disk/Windows/user/password |
 | `/setup` | Mount `/mnt/data` + cài rclone + ghi `rclone.conf` + xác minh OneDrive/Google Drive |
@@ -236,8 +249,9 @@ search_policy = ff
   được chọn sẽ lỗi.
 - Không xóa tài khoản khỏi `/gdrive` khi vẫn còn backup trên đó — bot cảnh báo
   trước khi xóa, nhưng dữ liệu vẫn nằm trên Google Drive của bạn.
-- Token Google dùng client công khai của rclone; nếu bị thu hồi, chạy lại
-  `rclone authorize "drive"` và thêm lại tài khoản.
+- Token Google dùng client công khai của rclone (redirect loopback
+  `http://127.0.0.1:53682/`); nếu bị thu hồi, vào `/gdrive` →
+  **🔗 Thêm tài khoản bằng link** để cấp quyền lại (hoặc dán JSON rclone).
 
 ---
 
@@ -331,6 +345,11 @@ secrets/README.md     # mô tả repo secrets (token thật không nằm ở đ�
 
 | Hiện tượng | Cách xử lý |
 |---|---|
+| `Không đọc được token bot từ repo bí mật` / `repo private và chưa có WM_GITHUB_TOKEN` | Repo `WinRemote-secrets` là private nên phải truyền PAT chỉ-đọc khi chạy one-liner: `WM_GITHUB_TOKEN='github_pat_...' bash <(curl ...)`. Fine-grained PAT phải chọn **đúng repo** `WinRemote-secrets` + quyền **Contents: Read-only**. Nếu lưu trong Colab Secrets: mở 🔑 → bật **Notebook access** cho `WM_GITHUB_TOKEN`. |
+| `token.txt không giống token bot` | File chỉ nên chứa token dạng `123456:ABC…` (hoặc một dòng `TELEGRAM_BOT_TOKEN=…`), không thêm ngoặc kép, khoảng trắng hay ghi chú. |
+| `PAT không hợp lệ hoặc đã hết hạn (HTTP 401)` | Tạo PAT mới (7–90 ngày) rồi chạy lại one-liner với PAT đó. |
+| `Không thấy .../token.txt (HTTP 404)` | PAT fine-grained chưa được cấp quyền repo đó, hoặc file chưa commit lên nhánh `main`. |
+| `Token Telegram không hợp lệ` | Token trong `token.txt` đã bị thu hồi/đổi — lấy token mới từ @BotFather, cập nhật file trong repo secrets rồi chạy lại. |
 | `Thiếu gh CLI` | Chạy lại `colab.py` (tự tải) hoặc `apt-get install gh` |
 | `HTTP 401 Bad credentials` | GitHub token sai/hết hạn → `/settings` nhập lại |
 | `Token thiếu quyền codespace` | Tạo classic token có scope `codespace` |
@@ -338,7 +357,7 @@ secrets/README.md     # mô tả repo secrets (token thật không nằm ở đ�
 | `Codespace không Available` | Kiểm tra quota/billing GitHub Codespaces |
 | `SSH tới Codespace thất bại` | Bot tự tạo/đăng ký key; kiểm tra scope `admin:public_key` |
 | `OneDrive token hết hạn` | `/settings` → OneDrive → **Đăng nhập tự động** lại, hoặc dán token mới |
-| `Google Drive token hết hạn/thu hồi` | `/gdrive` → xóa tài khoản lỗi → thêm lại bằng `rclone authorize "drive"` |
+| `Google Drive token hết hạn/thu hồi` | `/gdrive` → xóa tài khoản lỗi → **🔗 Thêm tài khoản bằng link** (hoặc dán JSON `rclone authorize "drive"`) |
 | `Không thấy backup trên Drive` | `/restore` quét cả hai cloud; kiểm tra `/gdrive → Kiểm tra` và đích backup ở `/backup` |
 | `Keepalive không chạy` | `/kalog` xem hostname/target có đúng Codespace không, bấm **Khởi động lại**; kiểm tra scope `codespace` + `admin:public_key` |
 | `/quota` báo thiếu số liệu | GitHub chỉ cập nhật mỗi giờ; bấm **Nhập số đã dùng** để nhập tay từ trang billing |

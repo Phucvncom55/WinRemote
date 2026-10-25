@@ -158,8 +158,9 @@ class Engine:
         if self.pending and self.pending.get('chat_id') == chat_id and self._is_owner(chat_id):
             kind = self.pending['kind']
             self.pending = None
-            self._consume_input(chat_id, kind, text, mid)
-            return
+            if not text.startswith('/'):
+                self._consume_input(chat_id, kind, text, mid)
+                return
         if text.startswith('/'):
             head = text.split()[0][1:]
             cmd = head.split('@')[0].lower()
@@ -982,13 +983,19 @@ class Engine:
         if act == 'menu':
             self.show_gdrive(chat_id, mid=mid)
         elif act == 'add':
+            url = oauth.gdrive_auth_url(self.cfg.get('gdrive_client_id') or None)
+            self.pending = {'chat_id': chat_id, 'kind': 'gdlcode'}
+            self.tg.edit_message(chat_id, mid, ui.gdrive_link_text(url),
+                                 buttons=ui.gdrive_link_kb(url))
+        elif act == 'paste':
             self.pending = {'chat_id': chat_id, 'kind': 'gdtok'}
             self.tg.edit_message(chat_id, mid, ui.gdrive_add_text(),
-                                 buttons=kb([[('❓ Cách lấy token', 'gd:help'),
-                                              ('❌ Bỏ qua', 'set:gdrive')]]))
+                                 buttons=kb([[('❓ Hướng dẫn', 'gd:help'),
+                                              ('⬅️ Google Drive', 'set:gdrive')]]))
         elif act == 'help':
             self.tg.send_message(chat_id, ui.gdrive_help_text(),
-                                 buttons=kb([[('➕ Thêm tài khoản', 'gd:add')],
+                                 buttons=kb([[('🔗 Thêm bằng link', 'gd:add')],
+                                             [('📋 Dán token JSON', 'gd:paste')],
                                              [('☁️ Google Drive', 'set:gdrive')]]))
         elif act == 'test':
             self.start_job('Kiểm tra Google Drive', chat_id, self.worker_gdrive_sync)
@@ -1251,6 +1258,10 @@ class Engine:
         elif kind == 'quota':
             if self._set_quota_manual(chat_id, text):
                 self.show_quota(chat_id, force=True)
+        elif kind == 'gdlcode':
+            self._try_delete(chat_id, mid)
+            self.start_job('Thêm Google Drive', chat_id,
+                           lambda ctx: self.worker_gdrive_link(ctx, text))
         elif kind == 'gdtok':
             self._try_delete(chat_id, mid)
             self.start_job('Thêm Google Drive', chat_id,
@@ -2297,6 +2308,19 @@ class Engine:
                              [('☁️ Google Drive', 'set:gdrive'), ('🏠 Trang chính', 'home')]]),
                  force=True)
 
+    def worker_gdrive_link(self, ctx, text):
+        ctx.edit('🔗 <b>GOOGLE DRIVE</b> — đang đổi mã đăng nhập thành token…', force=True)
+        code, err = oauth.parse_gdrive_code(text)
+        if err:
+            raise JobError(err + '\nBấm /gdrive → "🔗 Thêm tài khoản bằng link" để lấy link mới.')
+        tok, err = oauth.gdrive_exchange_code(
+            code, self.cfg.get('gdrive_client_id') or None,
+            self.cfg.get('gdrive_client_secret') or None)
+        if err:
+            raise JobError('Đăng nhập Google thất bại: ' + esc(err)
+                           + '\nBấm /gdrive → "🔗 Thêm tài khoản bằng link" để lấy link mới.')
+        self.worker_gdrive_add(ctx, json.dumps(tok))
+
     def worker_gdrive_add(self, ctx, text):
         ctx.edit('☁️ Đang kiểm tra token Google Drive…', force=True)
         raw = (text or '').strip()
@@ -2346,10 +2370,11 @@ class Engine:
         tot, usd = self.cfg.gdrive_total()
         ctx.edit(('♻️ Đã cập nhật' if replaced else '✅ Đã thêm') +
                  f' tài khoản Google Drive: <b>{esc(owner)}</b>\n'
-                 f'• Dung lượng: {fmt_bytes(entry["used"])}/{fmt_bytes(entry["total"])}\n'
-                 f'• Tổng ổ gộp ({len(accs)} tk): <b>{fmt_bytes(usd)}/{fmt_bytes(tot)}</b>\n\n'
-                 'Bấm "🧪 Kiểm tra & ghi cấu hình" để ghi union lên Codespace.',
+                 f'　└ {ui.usage_line(entry["used"], entry["total"])}\n'
+                 f'• Tổng ổ gộp ({len(accs)} tk): <b>{fmt_bytes(usd)} / {fmt_bytes(tot)}</b>\n\n'
+                 'Bấm "🧪 Ghi cấu hình ngay" để đưa union lên Codespace.',
                  buttons=kb([[('🧪 Ghi cấu hình ngay', 'gd:test')],
+                             [('➕ Thêm tài khoản khác', 'gd:add')],
                              [('☁️ Google Drive', 'set:gdrive'), ('🏠 Trang chính', 'home')]]),
                  force=True)
 

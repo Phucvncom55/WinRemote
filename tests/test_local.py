@@ -943,21 +943,49 @@ def test_gdrive_flow():
     try:
         env.configure()
         from bot import gh as ghmod
-        orig = ghmod.gdrive_info
-        ghmod.gdrive_info = lambda t: (
-            {'owner': 'gd1@example.com', 'total': 15 * 1024 ** 3, 'used': 1024 ** 3}, None)
+        from bot import oauth as oauthmod
+        orig_info = ghmod.gdrive_info
+        orig_ex = oauthmod.gdrive_exchange_code
+        seen = {}
+
+        def fake_info(tok):
+            owner = 'gd2@example.com' if 'a2' in tok else 'gd1@example.com'
+            return ({'owner': owner, 'total': 15 * 1024 ** 3, 'used': 1024 ** 3}, None)
+
+        def fake_exchange(code, cid=None, secret=None, redirect_uri=None):
+            seen['code'] = code
+            return ({'access_token': 'a1', 'refresh_token': 'r1', 'token_type': 'Bearer',
+                     'expiry': '2026-10-24T12:00:00Z',
+                     '_client_id': oauthmod.GDRIVE_CLIENT_ID,
+                     '_client_secret': oauthmod.GDRIVE_CLIENT_SECRET}, None)
+
+        ghmod.gdrive_info = fake_info
+        oauthmod.gdrive_exchange_code = fake_exchange
         try:
             env.send('/gdrive')
             env.wait('GOOGLE DRIVE — GỘP')
+            # Thêm bằng link: bot đưa link, người dùng dán lại URL redirect
             env.cb('gd:add', mid=1200)
             env.wait('THÊM TÀI KHOẢN GOOGLE DRIVE')
-            env.send('{"access_token":"a1","refresh_token":"r1"}', mid=3)
+            env.wait('127.0.0.1:53682')
+            env.send('http://127.0.0.1:53682/?code=4/0AbCdEf&scope=drive', mid=3)
             env.wait('Đã thêm')
+            assert seen['code'] == '4/0AbCdEf'
+
+            # Vẫn còn đường dán JSON từ rclone (nâng cao)
+            env.cb('gd:paste', mid=1203)
+            env.wait('DÁN TOKEN GOOGLE DRIVE')
+            n = len(env.events())
+            env.send('{"access_token":"a2","refresh_token":"r2"}', mid=4)
+            env.wait('Đã thêm', since=n)
         finally:
-            ghmod.gdrive_info = orig
+            ghmod.gdrive_info = orig_info
+            oauthmod.gdrive_exchange_code = orig_ex
         accs = env.cfg.gdrive_accounts
-        assert len(accs) == 1 and accs[0]['owner'] == 'gd1@example.com'
-        assert env.cfg.gdrive_total()[0] == 15 * 1024 ** 3
+        assert len(accs) == 2, accs
+        assert accs[0]['owner'] == 'gd1@example.com'
+        assert accs[1]['owner'] == 'gd2@example.com'
+        assert env.cfg.gdrive_total()[0] == 30 * 1024 ** 3
 
         # chọn Google Drive làm đích backup
         env.cb('gd:use', mid=1201)
@@ -983,11 +1011,97 @@ def test_gdrive_flow():
         env.cfg.set('backup_backend', 'onedrive')
         assert env.eng._backup_remote()[0] == 'gdrive'
         n = len(env.events())
-        env.send('/restore', mid=4)
+        env.send('/restore', mid=5)
         e3 = env.wait('KHÔI PHỤC TỪ ONEDRIVE', timeout=20, since=n)
         assert 'Google Drive' in e3['text']
     finally:
         env.cleanup()
+
+
+def test_oauth_gdrive_link():
+    """Link đăng nhập + đổi code Google Drive (mô phỏng, không gọi mạng)."""
+    import urllib.parse
+    from bot import oauth
+
+    url = oauth.gdrive_auth_url()
+    assert url.startswith(oauth.GDRIVE_AUTH_URL + '?')
+    assert 'response_type=code' in url
+    assert 'access_type=offline' in url
+    assert 'prompt=consent' in url
+    assert urllib.parse.quote(oauth.GDRIVE_SCOPE, safe='') in url
+    assert urllib.parse.quote(oauth.GDRIVE_REDIRECT_URI, safe='') in url
+
+    cases = [
+        ('http://127.0.0.1:53682/?code=4/0AX&scope=x', '4/0AX', None),
+        ('code=4/0AX', '4/0AX', None),
+        ('4/0AX4XfWh-abcdefghijklmnop', '4/0AX4XfWh-abcdefghijklmnop', None),
+    ]
+    for raw, want_code, want_err in cases:
+        code, err = oauth.parse_gdrive_code(raw)
+        assert (code, err) == (want_code, want_err), (raw, code, err)
+
+    code, err = oauth.parse_gdrive_code(
+        'http://127.0.0.1:53682/?error=access_denied&error_description=Denied')
+    assert code is None and 'Denied' in err
+    code, err = oauth.parse_gdrive_code('hello')
+    assert code is None and err
+
+    orig = oauth._post
+    calls = {}
+
+    def fake_post(u, fields, timeout=30):
+        calls.update(fields)
+        return ({'access_token': 'a1', 'refresh_token': 'r1', 'expires_in': 3600,
+                 'token_type': 'Bearer'}, None)
+
+    oauth._post = fake_post
+    try:
+        tok, err = oauth.gdrive_exchange_code('4/0AX')
+        assert err is None and tok['refresh_token'] == 'r1'
+        assert tok['_client_secret'] and tok['_client_id']
+        assert calls['grant_type'] == 'authorization_code'
+        assert calls['code'] == '4/0AX'
+        assert calls['redirect_uri'] == oauth.GDRIVE_REDIRECT_URI
+
+        # Google không trả refresh_token → báo lỗi rõ ràng
+        oauth._post = lambda u, f, timeout=30: ({'access_token': 'a1'}, None)
+        tok2, err2 = oauth.gdrive_exchange_code('4/0AX')
+        assert tok2 is None and 'refresh_token' in err2
+    finally:
+        oauth._post = orig
+
+
+def test_colab_token_helpers():
+    """colab.py đọc token.txt linh hoạt và báo lỗi rõ khi thiếu PAT."""
+    import colab
+    from unittest import mock
+
+    assert colab.clean_repo('https://github.com/Phucvncom55/WinRemote-secrets.git') \
+        == 'Phucvncom55/WinRemote-secrets'
+    assert colab.clean_repo(' Phucvncom55/x/ ') == 'Phucvncom55/x'
+
+    tok = '123456789:ABCdef_ghijklmnopqrstuvwxyz012345678'
+    assert colab.parse_bot_token('\n# ghi chú\nTELEGRAM_BOT_TOKEN=%s\n' % tok) == tok
+    assert colab.parse_bot_token('"%s"\n' % tok) == tok
+    assert colab.parse_bot_token('') == ''
+    assert colab.looks_like_bot_token(tok)
+    assert not colab.looks_like_bot_token('hello')
+    assert not colab.looks_like_bot_token('TELEGRAM_BOT_TOKEN=%s' % tok)
+
+    with mock.patch.dict(os.environ, {'WM_SECRETS_REPO': ''}):
+        assert colab.secrets_repo_name() == colab.DEFAULT_SECRETS_REPO
+
+    with mock.patch.dict(os.environ, {'TELEGRAM_BOT_TOKEN': '',
+                                      'WM_SECRETS_REPO': 'Phucvncom55/WinRemote-secrets',
+                                      'WM_GITHUB_TOKEN': ''}), \
+            mock.patch.object(colab, 'github_file_ex',
+                              return_value=(None, 'repo private và chưa có WM_GITHUB_TOKEN')):
+        try:
+            colab.fetch_token()
+            raise AssertionError('phải báo lỗi khi không đọc được token')
+        except RuntimeError as e:
+            assert 'WinRemote-secrets' in str(e)
+            assert 'WM_GITHUB_TOKEN' in str(e)
 
 
 def test_keepalive_supervisor():
@@ -1009,10 +1123,15 @@ def test_keepalive_supervisor():
                 return True, 'ok'
 
             def spawn(self, args):
-                script = ('echo KA_HOST=cs-one; '
-                          'echo "KA_BEAT 2026-10-24T00:00:00Z"; '
-                          'while true; do sleep 0.2; echo "KA_BEAT tick"; done')
-                return subprocess.Popen(['bash', '-c', script],
+                # Dùng chính Python hiện tại thay vì `bash` để test chạy được cả trên
+                # Windows (bash hay trỏ vào WSL chưa cài distro).
+                script = ("import time\n"
+                          "print('KA_HOST=cs-one', flush=True)\n"
+                          "print('KA_BEAT 2026-10-24T00:00:00Z', flush=True)\n"
+                          "while True:\n"
+                          "    time.sleep(0.2)\n"
+                          "    print('KA_BEAT tick', flush=True)\n")
+                return subprocess.Popen([sys.executable, '-u', '-c', script],
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         text=True, encoding='utf-8')
 
@@ -1069,6 +1188,8 @@ TESTS = [
     test_actions_flow,
     test_keepalive_log_callable,
     test_gdrive_flow,
+    test_oauth_gdrive_link,
+    test_colab_token_helpers,
     test_keepalive_supervisor,
 ]
 

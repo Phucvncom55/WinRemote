@@ -7,6 +7,7 @@ bot-config.json. Token được ghi vào rclone.conf trên Codespace ở bước
 """
 import datetime
 import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -157,6 +158,77 @@ def refresh_onedrive(token_json, client_id=None):
 GDRIVE_CLIENT_ID = '202264815644.apps.googleusercontent.com'
 GDRIVE_CLIENT_SECRET = 'X4Z3ca8xfWDb1V30epK2XaF7'
 GDRIVE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
+GDRIVE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
+# Loopback của client desktop: sau khi đồng ý, Google chuyển tới địa chỉ này
+# (?code=…). Không có server trên máy người dùng nên trình duyệt báo lỗi —
+# bình thường, chỉ cần copy nguyên địa chỉ dán lại vào chat.
+GDRIVE_REDIRECT_URI = 'http://127.0.0.1:53682/'
+GDRIVE_SCOPE = 'https://www.googleapis.com/auth/drive'
+
+
+def gdrive_auth_url(client_id=None, redirect_uri=None):
+    """Link đăng nhập Google Drive (authorization code + loopback)."""
+    params = {
+        'client_id': (client_id or GDRIVE_CLIENT_ID).strip(),
+        'redirect_uri': redirect_uri or GDRIVE_REDIRECT_URI,
+        'response_type': 'code',
+        'scope': GDRIVE_SCOPE,
+        'access_type': 'offline',
+        'prompt': 'consent',
+    }
+    return GDRIVE_AUTH_URL + '?' + urllib.parse.urlencode(params)
+
+
+def parse_gdrive_code(text):
+    """Tách authorization code từ link redirect (hoặc mã dán trực tiếp).
+
+    Trả (code, error) — chấp nhận cả URL đầy đủ và chuỗi `code=…`.
+    """
+    raw = (text or '').strip().strip('<>"\'')
+    if not raw:
+        return None, 'Chưa có nội dung — dán link redirect hoặc mã đăng nhập.'
+    looks_like_url = raw.lower().startswith(('http://', 'https://')) or 'code=' in raw
+    if looks_like_url:
+        url = raw if '://' in raw else 'http://127.0.0.1/?' + raw.split('?', 1)[-1]
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        if q.get('error'):
+            msg = (q.get('error_description') or q.get('error') or ['lỗi'])[0]
+            return None, f'Google từ chối cấp quyền: {msg}'
+        code = (q.get('code') or [''])[0]
+        if not code:
+            return None, ('Link không chứa mã <code>code=…</code>. Copy đúng địa chỉ '
+                          'trang báo "không truy cập được" (http://127.0.0.1:53682/?code=…).')
+        return code, None
+    if re.fullmatch(r'[A-Za-z0-9_./\-]{20,}', raw):
+        return raw, None
+    return None, 'Mã đăng nhập không hợp lệ — dán lại link redirect đầy đủ.'
+
+
+def gdrive_exchange_code(code, client_id=None, client_secret=None, redirect_uri=None):
+    """Đổi authorization code thành token (access + refresh). Trả (token, error)."""
+    code = (code or '').strip()
+    if not code:
+        return None, 'Thiếu mã đăng nhập.'
+    cid = (client_id or GDRIVE_CLIENT_ID).strip()
+    secret = (client_secret or GDRIVE_CLIENT_SECRET).strip()
+    data, err = _post(GDRIVE_TOKEN_URL, {
+        'grant_type': 'authorization_code',
+        'code': code,
+        'client_id': cid,
+        'client_secret': secret,
+        'redirect_uri': redirect_uri or GDRIVE_REDIRECT_URI,
+    })
+    if err:
+        return None, err
+    if not data or not data.get('access_token'):
+        msg = (data or {}).get('error_description') or (data or {}).get('error') or 'không rõ'
+        return None, f'Google không đổi được mã đăng nhập: {msg}'
+    if not data.get('refresh_token'):
+        return None, ('Google không trả <code>refresh_token</code>. Gỡ quyền bot tại '
+                      'myaccount.google.com/permissions rồi thêm lại bằng link.')
+    tok = normalize_token(data, cid)
+    tok['_client_secret'] = secret
+    return tok, None
 
 
 def refresh_gdrive(token_json, client_id=None, client_secret=None):

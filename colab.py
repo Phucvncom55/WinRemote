@@ -23,6 +23,7 @@ import base64
 import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -35,6 +36,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 UA = 'winremote-colab-bootstrap'
+DEFAULT_SECRETS_REPO = 'Phucvncom55/WinRemote-secrets'
 
 
 def say(msg=''):
@@ -65,36 +67,83 @@ def _api_headers(token=''):
     return h
 
 
-def github_file(repo, path, token='', timeout=30):
-    """Đọc file text từ GitHub Contents API. Trả về str hoặc None."""
+def github_file_ex(repo, path, token='', timeout=30):
+    """Đọc file text từ GitHub Contents API. Trả (text, error) — error nói rõ lý do."""
+    repo = clean_repo(repo)
     if not repo:
-        return None
+        return None, 'chưa đặt repo (WM_SECRETS_REPO).'
     url = f'https://api.github.com/repos/{repo}/contents/{urllib.parse.quote(path)}'
     req = urllib.request.Request(url, headers=_api_headers(token))
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.loads(r.read().decode('utf-8', 'replace'))
     except urllib.error.HTTPError as e:
-        if e.code != 404:
-            say(f'  ! GitHub API {e.code} khi đọc {repo}/{path}')
-        return None
+        if e.code == 401:
+            return None, ('PAT không hợp lệ hoặc đã hết hạn (HTTP 401) — tạo PAT mới và chạy lại.')
+        if e.code == 403:
+            return None, ('PAT không có quyền đọc file (HTTP 403) — cấp quyền '
+                          'Contents: Read-only cho đúng repo secrets.')
+        if e.code == 404:
+            if not token:
+                return None, (f'{repo} là repo private và chưa có WM_GITHUB_TOKEN — '
+                              'cần PAT chỉ-đọc được cấp quyền repo này.')
+            return None, (f'Không thấy {repo}/{path} (HTTP 404) — kiểm tra PAT fine-grained '
+                          'đã chọn đúng repo này + quyền Contents: Read-only, và file đã '
+                          'commit lên nhánh main.')
+        body = ''
+        try:
+            body = e.read().decode('utf-8', 'replace')[:300]
+        except Exception:
+            pass
+        return None, f'GitHub API {e.code}: {body or e.reason}'
     except Exception as e:  # noqa
-        say(f'  ! Lỗi mạng khi đọc {repo}/{path}: {e}')
-        return None
+        return None, f'Lỗi mạng khi đọc {repo}/{path}: {e}'
     if isinstance(data, dict) and data.get('encoding') == 'base64' and data.get('content'):
         try:
-            return base64.b64decode(data['content']).decode('utf-8')
-        except Exception:
-            return None
+            return base64.b64decode(data['content']).decode('utf-8'), None
+        except Exception as e:  # noqa
+            return None, f'Không giải mã được nội dung file: {e}'
     if isinstance(data, dict) and data.get('download_url'):
         try:
             req2 = urllib.request.Request(data['download_url'],
                                           headers={'User-Agent': UA})
             with urllib.request.urlopen(req2, timeout=timeout) as r2:
-                return r2.read().decode('utf-8', 'replace')
-        except Exception:
-            return None
-    return None
+                return r2.read().decode('utf-8', 'replace'), None
+        except Exception as e:  # noqa
+            return None, f'Không tải được file: {e}'
+    return None, 'GitHub trả về định dạng không mong đợi (có thể là thư mục, không phải file).'
+
+
+def clean_repo(value):
+    """Chuẩn hóa 'user/repo' từ URL/tên repo."""
+    v = (value or '').strip()
+    v = re.sub(r'^https?://github\.com/', '', v)
+    v = v.rstrip('/')
+    if v.endswith('.git'):
+        v = v[:-4]
+    return v
+
+
+def parse_bot_token(txt):
+    """Lấy token bot từ nội dung token.txt (chấp nhận cả dòng `TELEGRAM_BOT_TOKEN=...`)."""
+    for line in (txt or '').splitlines():
+        line = line.strip().strip('"').strip("'")
+        if not line or line.startswith('#'):
+            continue
+        if '=' in line:
+            key, val = line.split('=', 1)
+            if key.strip().upper() in ('TELEGRAM_BOT_TOKEN', 'BOT_TOKEN', 'TOKEN'):
+                line = val.strip().strip('"').strip("'")
+        return line
+    return ''
+
+
+def looks_like_bot_token(tok):
+    return bool(re.fullmatch(r'\d{5,}:[A-Za-z0-9_-]{30,}', tok or ''))
+
+
+def secrets_repo_name():
+    return clean_repo(env('WM_SECRETS_REPO') or DEFAULT_SECRETS_REPO)
 
 
 def _arch_tag():
@@ -172,6 +221,10 @@ def telegram_me(token):
     try:
         with urllib.request.urlopen(url, timeout=20) as r:
             d = json.loads(r.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 404):
+            return None, f'HTTP {e.code} — token bot sai hoặc đã bị thu hồi'
+        return None, f'HTTP {e.code} — {e.reason}'
     except Exception as e:  # noqa
         return None, str(e)
     if not d.get('ok'):
@@ -183,20 +236,37 @@ def fetch_token():
     """Ưu tiên env -> secrets/token.txt -> repo bí mật."""
     tok = env('TELEGRAM_BOT_TOKEN')
     if tok:
+        if not looks_like_bot_token(tok):
+            raise RuntimeError('TELEGRAM_BOT_TOKEN sai định dạng (cần dạng 123456:ABC...).')
         return tok, 'env TELEGRAM_BOT_TOKEN'
 
     local = ROOT / 'secrets' / 'token.txt'
     if local.exists():
-        tok = local.read_text(encoding='utf-8').strip()
+        tok = parse_bot_token(local.read_text(encoding='utf-8', errors='replace'))
         if tok:
+            if not looks_like_bot_token(tok):
+                raise RuntimeError(f'{local} có nội dung nhưng không giống token bot '
+                                   '(dạng 123456:ABC...).')
             return tok, str(local)
 
-    repo = env('WM_SECRETS_REPO')
+    repo = secrets_repo_name()
     token = env('WM_GITHUB_TOKEN')
     if repo:
-        txt = github_file(repo, 'token.txt', token)
-        if txt and txt.strip():
-            return txt.strip().splitlines()[0].strip(), f'{repo}/token.txt'
+        txt, err = github_file_ex(repo, 'token.txt', token)
+        if txt:
+            tok = parse_bot_token(txt)
+            if tok:
+                if not looks_like_bot_token(tok):
+                    raise RuntimeError(f'{repo}/token.txt không giống token bot '
+                                       '(dạng 123456:ABC...) — kiểm tra lại nội dung file.')
+                return tok, f'{repo}/token.txt'
+        raise RuntimeError(
+            'Không đọc được token bot từ repo bí mật.\n'
+            f'   • Repo: {repo}\n'
+            f'   • Lý do: {err or "file token.txt rỗng"}\n'
+            '   → Chạy lại kèm PAT chỉ-đọc của repo secrets, ví dụ:\n'
+            "     !WM_GITHUB_TOKEN='github_pat_...' bash <(curl -fsSL "
+            "'https://raw.githubusercontent.com/Phucvncom55/WinRemote/main/bootstrap.sh?v=1')")
 
     raise RuntimeError(
         'Không tìm thấy token bot. Đặt TELEGRAM_BOT_TOKEN, tạo secrets/token.txt, '
@@ -210,7 +280,7 @@ def restore_config(data_dir):
         say(f'  • Giữ cấu hình local: {dest} (đặt WM_PULL_CONFIG=1 để kéo đè từ repo)')
         return True
     sources = []
-    repo = env('WM_SECRETS_REPO')
+    repo = secrets_repo_name()
     token = env('WM_GITHUB_TOKEN')
     if repo:
         sources.append(('github', f'{repo}/bot-config.json'))
@@ -221,7 +291,9 @@ def restore_config(data_dir):
     for kind, label in sources:
         raw = None
         if kind == 'github':
-            raw = github_file(repo, 'bot-config.json', token)
+            raw, err = github_file_ex(repo, 'bot-config.json', token)
+            if err and '404' not in err:
+                say(f'  ! {err}')
         else:
             try:
                 raw = local.read_text(encoding='utf-8')
@@ -280,6 +352,12 @@ def main():
     except Exception as e:  # noqa
         say(f'  ! SSH: {e}')
 
+    if not env('WM_GITHUB_TOKEN'):
+        say('  ! Chưa có WM_GITHUB_TOKEN — không đọc được repo secrets private.')
+        if Path('/content').is_dir():
+            say('    Nếu đã lưu PAT ở Colab Secrets: mở 🔑 → bật "Notebook access" '
+                'cho WM_GITHUB_TOKEN, hoặc chạy lại kèm WM_GITHUB_TOKEN=\'github_pat_...\'.')
+
     try:
         token, source = fetch_token()
     except Exception as e:  # noqa
@@ -302,8 +380,8 @@ def main():
     else:
         say('  • Chưa có bot-config.json — sẽ tạo mới (nhập token qua /settings).')
 
-    code_repo = env('WM_CODE_REPO')
-    secrets_repo = env('WM_SECRETS_REPO')
+    code_repo = clean_repo(env('WM_CODE_REPO'))
+    secrets_repo = secrets_repo_name()
     if secrets_repo:
         say(f'  ✓ Config sync: {secrets_repo}')
     else:

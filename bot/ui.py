@@ -38,6 +38,26 @@ def shorten(s, n=24):
     return s if len(s) <= n else s[:n - 1] + '…'
 
 
+def usage_bar(used, total, width=10):
+    """Thanh dung lượng một dòng: '▰▰▰▱▱▱▱▱▱▱ 32%'."""
+    try:
+        used = max(0, int(used or 0))
+        total = max(0, int(total or 0))
+    except (TypeError, ValueError):
+        used, total = 0, 0
+    if total <= 0:
+        return '▱' * width + ' —'
+    pct = min(100.0, used * 100.0 / total)
+    filled = min(width, max(0, int(round(pct * width / 100.0))))
+    return '▰' * filled + '▱' * (width - filled) + f' {pct:.0f}%'
+
+
+def usage_line(used, total):
+    """ '▰▰▰▱▱▱▱▱▱▱ 32% · 4.8 GB / 15 GB' """
+    return (f'{usage_bar(used, total)} · '
+            f'{fmt_bytes(used or 0)} / {fmt_bytes(total or 0)}')
+
+
 def cs_port_url(cs, port):
     """URL cổng public của Codespace (https://<tên>-<cổng>.app.github.dev)."""
     cs = str(cs or '').strip()
@@ -72,13 +92,25 @@ ACT_ACTIVE = ('queued', 'requested', 'waiting', 'pending', 'in_progress')
 # ============================ màn hình chính ============================
 
 def h_start(cfg, claimed=False):
+    gh_ok = '✅' if cfg.has_github else '⛔'
+    od_ok = '✅' if cfg.has_onedrive else '⛔'
+    gd_ok = (f'✅ {len(cfg.gdrive_accounts)} tk') if cfg.gdrive_accounts else '⛔'
+    cs_txt = shorten(cfg.get('codespace') or 'chưa chọn', 22)
     lines = ['🤖 <b>VM WinRemote Bot</b>',
-             'Điều khiển Windows VM (dockurr/windows) trong GitHub Codespaces qua Telegram.']
+             '<i>Windows VM trong GitHub Codespaces — điều khiển qua Telegram</i>', '',
+             '📋 <b>TỔNG QUAN</b>',
+             f'🐙 GitHub {gh_ok}　☁️ OneDrive {od_ok}　☁️ Drive {gd_ok}',
+             f'🧩 Codespace: <code>{esc(cs_txt)}</code>']
+    if cfg.has_onedrive and cfg.get('od_total'):
+        lines.append('　└ ' + usage_line(cfg.get('od_used'), cfg.get('od_total')))
+    if cfg.gdrive_accounts:
+        tot, usd = cfg.gdrive_total()
+        lines.append('　└ ' + usage_line(usd, tot) + ' · ổ gộp')
+    lines += ['', '🚀 <b>LỆNH CHÍNH</b>',
+              '/status · /backup · /restore · /setup · /quota · /repo',
+              '/vm · /actions · /gdrive · /kalog · /ssh · /cleanup · /settings']
     if claimed:
-        lines.append('👑 Bạn là <b>chủ sở hữu</b> bot này.')
-    lines.append('')
-    lines.append('Lệnh chính: /status • /backup • /restore • /setup • /quota • /repo')
-    lines.append('Khác: /vm • /actions • /gdrive • /kalog • /ssh • /cleanup • /settings')
+        lines += ['', '👑 Bạn là <b>chủ sở hữu</b> bot này.']
     if not (cfg.has_github and cfg.has_onedrive and cfg.has_codespace):
         missing = []
         if not cfg.has_github:
@@ -87,10 +119,8 @@ def h_start(cfg, claimed=False):
             missing.append('OneDrive token')
         if not cfg.has_codespace:
             missing.append('chọn Codespace')
-        lines.append('')
-        lines.append('👉 Còn thiếu: <b>%s</b> — mở /settings.' % esc(', '.join(missing)))
-    lines.append('')
-    lines.append(DISCLAIMER)
+        lines += ['', '👉 Còn thiếu: <b>%s</b> — mở /settings.' % esc(', '.join(missing))]
+    lines += ['', DISCLAIMER]
     return '\n'.join(lines)
 
 
@@ -122,14 +152,15 @@ def account_text(cfg, ka_snap):
     lines.append(f"🐙 GitHub: <b>{esc(cfg.get('github_login') or '(chưa xác minh)')}</b> "
                  f"— token {'✅' if gh_tok else '⛔'} <code>{esc((gh_tok[:6] + '…') if gh_tok else '—')}</code>")
     if cfg.get('od_owner'):
-        lines.append(f"☁️ OneDrive: <b>{esc(cfg.get('od_owner'))}</b> — "
-                     f"{fmt_bytes(cfg.get('od_used') or 0)}/{fmt_bytes(cfg.get('od_total') or 0)}")
+        lines.append(f"☁️ OneDrive: <b>{esc(cfg.get('od_owner'))}</b>")
+        lines.append('　└ ' + usage_line(cfg.get('od_used'), cfg.get('od_total')))
     else:
-        lines.append(f"☁️ OneDrive: {'✅ token đã lưu' if od_tok else '⛔ chưa có token'}")
+        lines.append(f"☁️ OneDrive: {'✅ token đã lưu' if od_tok else '⛔ chưa có token'}"
+                     f" — <i>{'/settings → OneDrive' if not od_tok else 'chưa xác minh dung lượng'}</i>")
     if cfg.gdrive_accounts:
         tot, usd = cfg.gdrive_total()
-        lines.append(f"☁️ Google Drive: <b>{len(cfg.gdrive_accounts)} tài khoản</b> — "
-                     f"{fmt_bytes(usd)}/{fmt_bytes(tot)}")
+        lines.append(f"☁️ Google Drive: <b>{len(cfg.gdrive_accounts)} tài khoản</b> · ổ gộp")
+        lines.append('　└ ' + usage_line(usd, tot))
     lines.append(f"🧩 Codespace: <code>{esc(cfg.get('codespace') or '(chưa chọn)')}</code>")
     lines.append(f"🖥 VM: {vm['cores']} cores • {vm['ram_gb']}G RAM • {vm['disk_gb']}G disk • "
                  f"Windows {esc(vm['windows_version'])} • user <b>{esc(vm['user'])}</b>")
@@ -137,7 +168,7 @@ def account_text(cfg, ka_snap):
     lines.append(f"🔄 Keepalive: <b>{esc(ka_state)}</b> (mỗi {cfg.get('keepalive_interval')}s)")
     return '\n'.join(lines), kb([
         [('🔑 GitHub token', 'set:gh'), ('☁️ OneDrive', 'set:od')],
-        [('🏠 Trang chính', 'home')],
+        [('☁️ Google Drive', 'set:gdrive'), ('🏠 Trang chính', 'home')],
     ])
 
 
@@ -168,13 +199,13 @@ def status_text(cfg, cs_state, probe, ka_snap, job_info, act=None, quota=None):
                      + (' • Drive gộp ✅' if probe.get('gdrive') else '')
                      + (' • ⏳ <b>đang backup</b>' if probe.get('lock_busy') else ''))
     if cfg.get('od_owner'):
-        lines.append(f"☁️ OneDrive: {esc(cfg.get('od_owner'))} — "
-                     f"{fmt_bytes(cfg.get('od_used') or 0)}/{fmt_bytes(cfg.get('od_total') or 0)}")
+        lines.append(f"☁️ OneDrive: {esc(cfg.get('od_owner'))}")
+        lines.append('　└ ' + usage_line(cfg.get('od_used'), cfg.get('od_total')))
     if cfg.gdrive_accounts:
         tot, usd = cfg.gdrive_total()
-        lines.append(f"☁️ Google Drive: {len(cfg.gdrive_accounts)} tk • "
-                     f"{fmt_bytes(usd)}/{fmt_bytes(tot)}"
+        lines.append(f"☁️ Google Drive: {len(cfg.gdrive_accounts)} tk"
                      + (' • <b>đích backup</b>' if (cfg.get('backup_backend') or '') == 'gdrive' else ''))
+        lines.append('　└ ' + usage_line(usd, tot))
     if act and act.get('status') in ACT_ACTIVE:
         st = str(act.get('status'))
         st_txt = ACT_STATE_VN.get(st, st)
@@ -229,23 +260,37 @@ def status_kb(cfg, cs_state, probe, act=None):
 def settings_text(cfg):
     vm = cfg.vm()
     ka = 'BẬT 🟢' if cfg.get('keepalive_enabled') else 'TẮT ⚪'
-    lines = ['🔧 <b>CÀI ĐẶT</b>', '']
-    lines.append(f"🐙 GitHub token: {'✅ đã lưu' if cfg.has_github else '⛔ chưa có'}"
-                 + (f" (<b>{esc(cfg.get('github_login'))}</b>)" if cfg.get('github_login') else ''))
-    lines.append(f"☁️ OneDrive token: {'✅ đã lưu' if cfg.has_onedrive else '⛔ chưa có'}")
+    backend = 'Google Drive' if (cfg.get('backup_backend') or '') == 'gdrive' else 'OneDrive'
+    lines = ['🔧 <b>CÀI ĐẶT</b>', '', '<b>KẾT NỐI</b>']
+    gh = '✅ đã lưu' if cfg.has_github else '⛔ chưa có'
+    if cfg.get('github_login'):
+        gh = f"✅ <b>{esc(cfg.get('github_login'))}</b>"
+    lines.append('🐙 GitHub　' + gh)
+    if cfg.has_onedrive:
+        od = '✅ đã kết nối'
+        if cfg.get('od_owner'):
+            od = f"✅ <b>{esc(shorten(cfg.get('od_owner'), 28))}</b>"
+        lines.append('☁️ OneDrive　' + od)
+        if cfg.get('od_total'):
+            lines.append('　└ ' + usage_line(cfg.get('od_used'), cfg.get('od_total')))
+    else:
+        lines.append('☁️ OneDrive　⛔ chưa kết nối')
     n_gd = len(cfg.gdrive_accounts)
     if n_gd:
         tot, usd = cfg.gdrive_total()
-        lines.append(f"☁️ Google Drive: ✅ {n_gd} tài khoản — {fmt_bytes(usd)}/{fmt_bytes(tot)}"
-                     f" • backup: {'Google Drive' if (cfg.get('backup_backend') or '') == 'gdrive' else 'OneDrive'}")
+        lines.append(f'☁️ Google Drive　✅ <b>{n_gd} tài khoản</b> · ổ gộp')
+        lines.append('　└ ' + usage_line(usd, tot))
     else:
-        lines.append('☁️ Google Drive: ⛔ chưa có tài khoản')
-    lines.append(f"🧩 Codespace: <code>{esc(cfg.get('codespace') or '(chưa chọn)')}</code>")
+        lines.append('☁️ Google Drive　⛔ chưa có tài khoản')
+    lines.append(f'📦 Đích backup　<b>{backend}</b>')
+    lines.append('')
+    lines.append('<b>HẠ TẦNG</b>')
+    lines.append(f"🧩 Codespace　<code>{esc(shorten(cfg.get('codespace') or '(chưa chọn)', 34))}</code>")
     if cfg.get('cs_repo'):
-        lines.append(f"📦 Repo: <code>{esc(cfg.get('cs_repo'))}</code>"
-                     + (' • Tailscale key ✅' if cfg.get('tailscale_key') else ''))
-    lines.append(f"🔄 Keepalive: <b>{ka}</b> • chu kỳ {cfg.get('keepalive_interval')}s")
-    lines.append(f"🖥 VM: {vm['cores']} cores • {vm['ram_gb']}G RAM • {vm['disk_gb']}G • "
+        lines.append(f"📁 Repo　<code>{esc(shorten(cfg.get('cs_repo'), 34))}</code>"
+                     + (' · Tailscale ✅' if cfg.get('tailscale_key') else ''))
+    lines.append(f"🔄 Keepalive　<b>{ka}</b> · mỗi {cfg.get('keepalive_interval')}s")
+    lines.append(f"🖥 VM　{vm['cores']} cores · {vm['ram_gb']}G RAM · {vm['disk_gb']}G · "
                  f"Windows {esc(vm['windows_version'])}")
     return '\n'.join(lines)
 
@@ -255,9 +300,9 @@ def settings_kb(cfg):
     ka = 'BẬT' if cfg.get('keepalive_enabled') else 'TẮT'
     return kb([
         [('🔑 GitHub token', 'set:gh'), ('☁️ OneDrive', 'set:od')],
-        [(f"☁️ Google Drive: {len(cfg.gdrive_accounts)} tk", 'set:gdrive')],
-        [(f"🧩 Codespace: {shorten(cfg.get('codespace') or 'chọn…', 18)}", 'set:cs')],
-        [(f"📦 Repo: {shorten(cfg.get('cs_repo') or 'chưa đặt', 24)}", 'set:repo')],
+        [(f"☁️ Google Drive ({len(cfg.gdrive_accounts)} tk)", 'set:gdrive')],
+        [(f"🧩 Codespace: {shorten(cfg.get('codespace') or 'chọn…', 18)}", 'set:cs'),
+         ('📁 Repo', 'set:repo')],
         [('🆕 Tạo Codespace mới (4c/16G/32G)', 'set:csnew')],
         [(f"🔄 Keepalive: {ka}", 'set:ka'),
          (f"⏱ {cfg.get('keepalive_interval')}s", 'set:kaint')],
@@ -324,30 +369,31 @@ def repo_list_kb(repos):
 def onedrive_text(cfg):
     lines = ['☁️ <b>ONEDRIVE</b>', '']
     if cfg.has_onedrive:
-        lines.append('• Token: ✅ đã lưu')
         if cfg.get('od_owner'):
-            lines.append(f"• Tài khoản: <b>{esc(cfg.get('od_owner'))}</b> — "
-                         f"{fmt_bytes(cfg.get('od_used') or 0)}/{fmt_bytes(cfg.get('od_total') or 0)}")
+            lines.append(f'✅ Đã kết nối · <b>{esc(cfg.get("od_owner"))}</b>')
+            if cfg.get('od_total'):
+                lines.append('　└ ' + usage_line(cfg.get('od_used'), cfg.get('od_total')))
+        else:
+            lines.append('✅ Token đã lưu (chưa xác minh dung lượng)')
     else:
-        lines.append('• Token: ⛔ chưa có')
-    lines.append('')
-    lines.append('🔐 <b>Đăng nhập tự động</b> (khuyến nghị): bot hiện link + mã, bạn mở trên '
-                 'điện thoại/máy tính, đăng nhập Microsoft rồi đồng ý quyền OneDrive. '
-                 'Bot tự nhận token, không cần cài rclone trên máy bạn.')
-    lines.append('')
-    lines.append('📋 <b>Dán token JSON</b>: dành cho trường hợp tài khoản bị tổ chức chặn '
-                 'đăng nhập thiết bị — tạo bằng <code>rclone authorize onedrive</code>.')
+        lines.append('⛔ Chưa kết nối')
+    lines += ['', '🔗 <b>Đăng nhập bằng link</b> — không cần cài gì trên máy bạn:',
+              '1️⃣ Bấm nút bên dưới → mở trang đăng nhập Microsoft.',
+              '2️⃣ Nhập mã 9 ký tự bot đưa và đăng nhập tài khoản.',
+              '3️⃣ Bấm <b>Đồng ý / Accept</b> để cấp quyền OneDrive.',
+              '　 Bot tự nhận token và lưu lại (có refresh_token, dùng lâu dài).',
+              '',
+              '<i>📋 Tùy chọn nâng cao: dán JSON từ</i> <code>rclone authorize onedrive</code> '
+              '<i>nếu tài khoản của bạn bị tổ chức chặn đăng nhập thiết bị.</i>']
     return '\n'.join(lines)
 
 
 def onedrive_kb(cfg):
-    rows = [
-        [('🔐 Đăng nhập OneDrive tự động', 'set:odlogin')],
-        [('📋 Dán token JSON (nâng cao)', 'set:odmanual')],
-    ]
+    rows = [[('🔗 Đăng nhập OneDrive (link + mã)', 'set:odlogin')]]
     if cfg.has_onedrive:
-        rows.append([('🔄 Kiểm tra / làm mới token', 'set:odcheck')])
-        rows.append([('📤 Đồng bộ lên Codespace', 'set:odpush')])
+        rows.append([('🔄 Kiểm tra / làm mới token', 'set:odcheck'),
+                     ('📤 Ghi lên Codespace', 'set:odpush')])
+    rows.append([('📋 Dán token JSON (nâng cao)', 'set:odmanual')])
     rows.append([('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')])
     return kb(rows)
 
@@ -358,18 +404,18 @@ def onedrive_login_text(start, note=''):
         'https://login.microsoftonline.com/device'
     code = start.get('user_code') or ''
     mins = int((start.get('expires_in') or 900) / 60)
-    lines = ['🔐 <b>ĐĂNG NHẬP ONEDRIVE TỰ ĐỘNG</b>', '']
-    lines.append('1️⃣ Mở link sau trên điện thoại hoặc máy tính:')
-    lines.append(f'👉 {esc(uri)}')
+    lines = ['🔗 <b>ĐĂNG NHẬP ONEDRIVE BẰNG LINK</b>', '']
+    lines.append('1️⃣ Bấm nút <b>Mở trang đăng nhập Microsoft</b> bên dưới')
+    lines.append(f'　 hoặc mở: {esc(uri)}')
     lines.append('')
     lines.append('2️⃣ Nhập mã:')
     lines.append(f'<code>{esc(code)}</code>')
     lines.append('')
-    lines.append('3️⃣ Đăng nhập tài khoản Microsoft và bấm <b>Đồng ý / Accept</b> để cấp quyền '
+    lines.append('3️⃣ Đăng nhập và bấm <b>Đồng ý / Accept</b> để cấp quyền '
                  'OneDrive (Files.ReadWrite.All).')
     lines.append('')
-    lines.append(f'⏳ Bot đang chờ tối đa <b>{mins} phút</b> — bạn không cần làm gì thêm. '
-                 'Gõ /cancel để hủy.')
+    lines.append(f'⏳ Bot đang tự chờ tối đa <b>{mins} phút</b> — xong là lưu token ngay. '
+                 '<i>/cancel để hủy.</i>')
     if note:
         lines.append('')
         lines.append(note)
@@ -398,31 +444,34 @@ def gdrive_text(cfg):
     lines = ['☁️ <b>GOOGLE DRIVE — GỘP NHIỀU TÀI KHOẢN</b>', '']
     lines.append(f'• Số tài khoản: <b>{len(accs)}</b>')
     if accs:
-        lines.append(f'• Tổng dung lượng: <b>{fmt_bytes(used)}</b> / '
-                     f'<b>{fmt_bytes(total)}</b>')
-        lines.append(f"• Remote gộp: <code>{esc(cfg.get('gdrive_remote') or 'gdrive')}:</code> "
-                     '(một ổ lớn cho backup/restore)')
+        lines.append('• Ổ gộp: <code>%s:</code> — một ổ lớn cho backup/restore'
+                     % esc(cfg.get('gdrive_remote') or 'gdrive'))
+        lines.append('• Tổng dung lượng: ' + usage_line(used, total))
     lines.append(f"• Đang dùng để backup: <b>{'Google Drive' if backend == 'gdrive' else 'OneDrive'}</b>")
     lines.append('')
     if accs:
         lines.append('📋 <b>Danh sách tài khoản</b>')
         for i, a in enumerate(accs[:10], 1):
-            lines.append(f"　{i}. {esc(a.get('owner') or a.get('name') or '?')} — "
-                         f"{fmt_bytes(a.get('used') or 0)}/{fmt_bytes(a.get('total') or 0)}")
+            lines.append(f"　{i}. {esc(shorten(a.get('owner') or a.get('name') or '?', 36))}")
+            lines.append('　　└ ' + usage_line(a.get('used'), a.get('total')))
+        if len(accs) > 10:
+            lines.append(f'　… và {len(accs) - 10} tài khoản khác')
         lines.append('')
-        lines.append('💡 Bot tạo 1 remote cho mỗi tài khoản (gdrive1, gdrive2, …) rồi gộp '
-                     'thành remote <code>gdrive:</code>. File backup được chia lên các tài khoản '
-                     'theo dung lượng trống; restore đọc lại xuyên suốt các tài khoản.')
+        lines.append('💡 Mỗi tài khoản là một remote riêng (gdrive1, gdrive2, …); bot gộp thành '
+                     '<code>gdrive:</code>. File backup được chia lên tài khoản còn nhiều chỗ '
+                     'trống, restore đọc lại xuyên suốt các tài khoản.')
     else:
-        lines.append('<i>Chưa có tài khoản nào. Bấm "➕ Thêm tài khoản" để dán token JSON '
-                     'lấy từ <code>rclone authorize "drive"</code>.</i>')
+        lines.append('<i>Chưa có tài khoản nào.</i>')
         lines.append('')
-        lines.append('🎯 Nhờ vậy nhiều tài khoản 15 GB được gộp thành một ổ lớn để chứa backup VM.')
+        lines.append('🔗 Bấm <b>Thêm tài khoản bằng link</b>: bot đưa link đăng nhập Google, '
+                     'bạn đồng ý quyền rồi dán lại link redirect — không cần cài rclone.')
+        lines.append('')
+        lines.append('🎯 Nhiều tài khoản 15 GB được gộp thành một ổ lớn để chứa backup VM.')
     return '\n'.join(lines)
 
 
 def gdrive_kb(cfg):
-    rows = [[('➕ Thêm tài khoản (dán token)', 'gd:add')]]
+    rows = [[('🔗 Thêm tài khoản bằng link', 'gd:add')]]
     if cfg.has_gdrive:
         rows.append([('🧪 Kiểm tra & ghi cấu hình', 'gd:test')])
         cur = (cfg.get('backup_backend') or 'onedrive')
@@ -433,31 +482,62 @@ def gdrive_kb(cfg):
             del_row.append((f"🗑 {i + 1}", f'gd:del:{i}'))
         if del_row:
             rows.append(del_row)
-    rows.append([('❓ Cách lấy token', 'gd:help')])
+    rows.append([('📋 Dán token JSON', 'gd:paste'), ('❓ Hướng dẫn', 'gd:help')])
     rows.append([('⚙️ Cài đặt', 'set:menu'), ('🏠 Trang chính', 'home')])
     return kb(rows)
 
 
+def gdrive_link_text(url):
+    lines = ['🔗 <b>THÊM TÀI KHOẢN GOOGLE DRIVE</b>', '',
+             '1️⃣ Bấm nút <b>Mở trang đăng nhập Google</b> bên dưới.',
+             '2️⃣ Chọn đúng tài khoản Google → bấm <b>Cho phép / Allow</b>.',
+             '3️⃣ Trình duyệt chuyển tới địa chỉ dạng',
+             '　 <code>http://127.0.0.1:53682/?code=…</code>',
+             '　 và báo <i>không truy cập được</i> — bình thường, bot không chạy web trên máy bạn.',
+             '4️⃣ Copy <b>toàn bộ địa chỉ</b> trên thanh địa chỉ (hoặc phần <code>code=…</code>) '
+             'rồi dán vào chat.',
+             '',
+             '⏳ Bot chờ tối đa 10 phút · /cancel để hủy.',
+             '🔁 Lặp lại cho từng tài khoản muốn gộp.',
+             '',
+             '<i>Bot chỉ dùng quyền Drive để sao lưu; token được lưu trong cấu hình riêng tư '
+             'và tự làm mới.</i>']
+    if url and len(url) > 60:
+        lines += ['', '<i>Nếu nút không mở được, dùng lệnh /gdrive → "📋 Dán token JSON" '
+                      'hoặc mở link trên máy có trình duyệt.</i>']
+    return '\n'.join(lines)
+
+
+def gdrive_link_kb(url):
+    rows = []
+    if url:
+        rows.append([('🌐 Mở trang đăng nhập Google', url)])
+    rows.append([('📋 Dán token JSON (nâng cao)', 'gd:paste')])
+    rows.append([('❌ Hủy', 'set:gdrive')])
+    return kb(rows)
+
+
 def gdrive_help_text():
-    return ('🔑 <b>CÁCH LẤY TOKEN GOOGLE DRIVE</b>\n\n'
-            'Làm trên máy có trình duyệt (Windows/Mac/Linux):\n'
-            '1. Cài rclone: https://rclone.org/downloads/\n'
-            '2. Mở terminal, chạy:\n'
-            '   <code>rclone authorize "drive"</code>\n'
-            '3. Trình duyệt mở ra → đăng nhập tài khoản Google → bấm <b>Cho phép</b>.\n'
-            '4. Terminal in ra một chuỗi JSON dạng:\n'
-            '   <code>{"access_token":"ya29...","refresh_token":"1//...","expiry":"..."}</code>\n'
-            '5. Copy nguyên chuỗi JSON đó, quay lại bot bấm '
-            '<b>➕ Thêm tài khoản</b> rồi dán vào.\n\n'
-            '🔁 Làm lại bước 2–5 với từng tài khoản Google muốn gộp.\n\n'
+    return ('🔑 <b>THÊM TÀI KHOẢN GOOGLE DRIVE</b>\n\n'
+            '<b>Cách 1 — bằng link (khuyến nghị)</b>\n'
+            '1. /gdrive → <b>🔗 Thêm tài khoản bằng link</b>.\n'
+            '2. Bấm nút mở trang đăng nhập → chọn tài khoản → <b>Cho phép</b>.\n'
+            '3. Trình duyệt chuyển tới <code>http://127.0.0.1:53682/?code=…</code> và báo '
+            'không truy cập được (bình thường).\n'
+            '4. Copy toàn bộ địa chỉ đó, dán lại vào chat — bot tự đổi thành token và lưu.\n\n'
+            '<b>Cách 2 — dán JSON từ rclone (nâng cao)</b>\n'
+            '1. Trên máy có trình duyệt, cài rclone: https://rclone.org/downloads/\n'
+            '2. Chạy <code>rclone authorize "drive"</code> → đăng nhập → <b>Cho phép</b>.\n'
+            '3. Copy chuỗi JSON terminal in ra, dán vào mục '
+            '<b>📋 Dán token JSON</b>.\n\n'
+            '🔁 Làm lại với từng tài khoản Google muốn gộp.\n'
             '💡 Token có <code>refresh_token</code> nên dùng lâu dài; bot tự làm mới khi cần.\n'
-            '⚠️ Token này cho phép đọc/ghi Drive của tài khoản — chỉ dán trong chat riêng với bot, '
-            'sau đó nên xóa tin nhắn chứa token.')
+            '⚠️ Chỉ dán trong chat riêng với bot và nên xóa tin nhắn chứa token sau đó.')
 
 
 def gdrive_add_text():
-    return ('➕ <b>THÊM TÀI KHOẢN GOOGLE DRIVE</b>\n\n'
-            'Gửi <b>chuỗi JSON</b> token (tin nhắn tiếp theo), lấy bằng lệnh:\n'
+    return ('📋 <b>DÁN TOKEN GOOGLE DRIVE (JSON)</b>\n\n'
+            'Gửi <b>chuỗi JSON</b> (tin nhắn tiếp theo), lấy bằng lệnh:\n'
             '<code>rclone authorize "drive"</code>\n\n'
             'Chuỗi cần có <code>access_token</code> và <code>refresh_token</code>. '
             'Bot sẽ kiểm tra dung lượng rồi lưu tài khoản.\n'

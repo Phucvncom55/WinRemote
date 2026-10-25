@@ -50,7 +50,11 @@ if [[ -z "${WM_GITHUB_TOKEN:-}" ]] && command -v gh >/dev/null 2>&1; then
 fi
 if [[ -z "${WM_GITHUB_TOKEN:-}" && -d /content ]]; then
   value="$("$PY" -c 'from google.colab import userdata; print(userdata.get("WM_GITHUB_TOKEN") or "", end="")' 2>/dev/null || true)"
-  [[ -n "$value" ]] && export WM_GITHUB_TOKEN="$value"
+  if [[ -n "$value" ]]; then
+    export WM_GITHUB_TOKEN="$value"
+  else
+    printf '\033[1;33m! Chưa đọc được Colab Secret WM_GITHUB_TOKEN (kiểm tra 🔑 → Notebook access) — sẽ thử đọc token.txt từ repo private.\033[0m\n' >&2
+  fi
 fi
 
 exec "$PY" "$SCRIPT_DIR/colab.py" "$@"
